@@ -37,17 +37,16 @@ badge/
 └── apps/
     └── my_app/
         ├── __init__.py
-        ├── icon.png
         ├── README.md
         └── assets/       # optional app-owned images, fonts, and data
 ```
 
 - Use lowercase path-safe app names, preferably `snake_case`. Do not use the
   reserved names `menu` or `startup`.
-- Each app needs its own entry point, icon, documentation, and assets. Avoid
+- Each app needs its own entry point, documentation, and assets. Avoid
   dependencies on sibling apps or new shared runtime libraries.
-- Ship an app-specific square PNG icon, at least 24x24; 48x48 is preferred.
-  Replace a scaffold's placeholder icon before delivery.
+- Never create, include, load, or deploy `icon.png` in apps. Remove any
+  scaffold-generated `icon.png`; custom app icons are not required.
 - The README's first paragraph after its title must be one plain-text
   description sentence, 10-200 characters long, ending in punctuation.
   Follow it with controls, usage, hardware/network requirements, configuration,
@@ -106,6 +105,8 @@ python3 "$scripts/validate_app.py" badge/apps/my_app --target emulator
 If the skill is installed elsewhere, use its actual scripts directory
 (for example `.github/skills/hyb26-skill/scripts` only if present).
 On Windows, use the corresponding PowerShell path and `python`.
+Remove any scaffold-generated `icon.png` before validation. If upstream
+tools require it, report the conflict rather than adding the file.
 Validate every changed app; static validation does not execute the app.
 Add focused tests for app logic where practical without requiring firmware
 globals to exist on desktop Python.
@@ -129,14 +130,11 @@ Deploy only when requested. Use the skill's USB workflow and discovery tools:
 - `/system` is normally read-only over serial. Enter USB Disk Mode and copy
   only the requested app to `BADGER/apps` (or `BADGER/system/apps` on some
   firmware). Never copy apps to the `RP2350` bootloader drive.
-- Verify the installed icon matches the source. Stock menus may ignore
-  `icon.png`; check menu support and, when needed for the requested
-  deployment, preview and apply the skill's backed-up menu icon patch.
-  This is a deliberate exception to avoiding system-file changes.
+- Do not deploy `icon.png` or patch the system menu to support custom app
+  icons. Leave launcher icon behavior unchanged.
 - Flush and eject with `badge_serial.py eject`, wait for the badge to return,
   then check normal launch, every screen and control, both orientations,
-  HOME/re-open, persistence, and relevant failure cases. Visually confirm the
-  menu tile uses the app's icon; copying the PNG alone is not proof.
+  HOME/re-open, persistence, and relevant failure cases.
 
 For app delivery, distinguish static validation, simulator checks, deployment,
 and on-badge checks actually performed. If hardware is unavailable, explicitly
