@@ -29,7 +29,7 @@ def load_firefly(clock, identity=b"LOCALBAD", radio=None):
     link = SimpleNamespace(APP="app", radio=radio)
     spec = importlib.util.spec_from_file_location("quantum_firefly", APP / "firefly.py")
     module = importlib.util.module_from_spec(spec)
-    with patch.dict(sys.modules, {
+    with patch.object(sys, "path", [str(APP)] + sys.path), patch.dict(sys.modules, {
         "badgeware": SimpleNamespace(link=link),
         "machine": SimpleNamespace(unique_id=lambda: identity),
         "time": SimpleNamespace(
@@ -50,21 +50,27 @@ class FireflyTests(unittest.TestCase):
         self.firefly.phase = 0
         self.firefly.since_flash = 0
 
-    def receive(self, identity=b"OTHERBAD", sequence=1, phase=1500):
-        payload = self.module.advertisement(identity, sequence, phase)
+    def receive(self, identity=b"OTHERBAD", sequence=1, phase=1500,
+                color_phase=0, color_reference=None, color_hops=0):
+        payload = self.module.advertisement(
+            identity, sequence, phase, color_phase, color_reference, color_hops,
+        )
         self.firefly.receive(5, (0, b"abcdef", 0, -40, payload))
 
     def test_wire_format_and_malformed_advertisements(self):
         module = self.module
-        payload = module.advertisement(b"OTHERBAD", 65535, 1999)
+        payload = module.advertisement(b"OTHERBAD", 65535, 1999, 19999)
         self.assertLessEqual(len(payload), 31)
-        self.assertEqual(module.read_beacon(payload), (b"OTHERBAD", 65535, 1999))
+        self.assertEqual(module.read_beacon(payload), (b"OTHERBAD", 65535, 1999, 19999, b"OTHERBAD", 0))
         for length in range(len(payload)):
             self.assertIsNone(module.read_beacon(payload[:length]))
         for payload in (
             b"", b"\x00", b"\xff", b"\x02\xff\xff",
-            payload.replace(b"QF\x01", b"QF\x02"),
-            module.advertisement(b"OTHERBAD", 1, 2000),
+            payload.replace(module.MAGIC, b"QF\x01"),
+            module.advertisement(b"OTHERBAD", 1, 2000, 0),
+            module.advertisement(b"OTHERBAD", 1, 0, 20000),
+            module.advertisement(b"OTHERBAD", 1, 0, 0, b"FIRSTBAD", 0),
+            module.advertisement(b"OTHERBAD", 1, 0, 0, b"OTHERBAD", 1),
         ):
             self.assertIsNone(module.read_beacon(payload))
         for byte in range(256):
@@ -88,6 +94,7 @@ class FireflyTests(unittest.TestCase):
             self.clock[0] = elapsed
             if self.firefly.update():
                 flashes.append(elapsed)
+            self.assertEqual(self.firefly.color_phase_ms, elapsed % self.module.CYCLE_MS)
         self.assertEqual(flashes, [2000, 4000, 6000])
 
     def test_stall_and_tick_wrap_do_not_emit_a_backlog(self):
@@ -157,10 +164,64 @@ class FireflyTests(unittest.TestCase):
         for _ in range(100):
             self.firefly.receive(5, (0, b"abcdef", 0, -40, b"unrelated"))
         self.assertEqual(self.firefly.pending, [])
-        payload = bytearray(self.module.advertisement(b"OTHERBAD", 1, 1400))
+        payload = bytearray(self.module.advertisement(b"OTHERBAD", 1, 1400, 8000))
         self.firefly.receive(5, (0, b"abcdef", 0, -40, memoryview(payload)))
         payload[:] = b"\x00" * len(payload)
-        self.assertEqual(self.firefly.pending[0][0], (b"OTHERBAD", 1, 1400))
+        self.assertEqual(self.firefly.pending[0][0], (b"OTHERBAD", 1, 1400, 8000, b"OTHERBAD", 0))
+
+    def test_color_phase_slews_toward_reference_without_waiting_for_a_flash(self):
+        self.receive(identity=b"FIRSTBAD", phase=0, color_phase=8000)
+        self.assertFalse(self.firefly.update())
+        self.assertEqual(self.firefly.color_phase_ms, self.module.CORRECTION_MS)
+        self.assertEqual(self.firefly.color_reference, b"FIRSTBAD")
+        for _ in range(79):
+            self.firefly.update()
+        self.assertEqual(self.firefly.color_phase_ms, 8000)
+        self.assertEqual(self.firefly.phase, 0)
+
+    def test_color_wrap_takes_shortest_path_and_survives_missing_reference(self):
+        self.firefly.color_phase_ms = self.firefly.color_clock_ms = 19950
+        self.receive(identity=b"FIRSTBAD", color_phase=50)
+        self.firefly.update()
+        self.assertEqual(self.firefly.color_phase_ms, 50)
+        self.clock[0] = 10000
+        self.firefly.update()
+        self.assertEqual(self.firefly.color_phase_ms, 10050)
+        self.assertEqual(self.firefly.color_clock_ms, 10050)
+        self.assertEqual(self.firefly.peers, {})
+
+    def test_reference_choice_is_deterministic_and_does_not_depend_on_receive_order(self):
+        for order in ((b"FIRSTBAD", b"ABADGE00"), (b"ABADGE00", b"FIRSTBAD")):
+            firefly = self.module.Fireflies()
+            firefly.start()
+            for identity in order:
+                packet = self.module.advertisement(identity, 1, 0, 8000)
+                firefly.receive(5, (0, b"abcdef", 0, -40, packet))
+            firefly.update()
+            self.assertEqual(firefly.color_reference, b"ABADGE00")
+            packet = self.module.advertisement(b"FIRSTBAD", 2, 0, 12000)
+            firefly.receive(5, (0, b"abcdef", 0, -40, packet))
+            firefly.update()
+            self.assertEqual(firefly.color_clock_ms, 8000)
+
+    def test_relays_forward_reference_clock_not_their_still_converging_palette(self):
+        self.receive(
+            identity=b"ZRELAY00", color_phase=8000,
+            color_reference=b"FIRSTBAD", color_hops=1,
+        )
+        self.firefly.update()
+        self.assertEqual(self.firefly.color_phase_ms, 100)
+        self.assertEqual(self.firefly.color_clock_ms, 8000)
+        self.assertEqual(self.firefly.color_hops, 2)
+        self.firefly.broadcast()
+        packet = self.module.link.radio.advertise.call_args.kwargs["adv_data"]
+        self.assertEqual(self.module.read_beacon(packet)[3:], (8000, b"FIRSTBAD", 2))
+        self.receive(
+            identity=b"ARELAY00", color_phase=12000,
+            color_reference=b"FIRSTBAD", color_hops=2,
+        )
+        self.firefly.update()
+        self.assertEqual(self.firefly.color_clock_ms, 8000)
 
     def test_memory_and_group_correction_are_bounded(self):
         self.firefly.phase = self.firefly.since_flash = 800
@@ -201,6 +262,7 @@ class FireflyTests(unittest.TestCase):
                     module = load_firefly(clock, struct.pack("<Q", index), radio)
                     firefly = module.Fireflies()
                     firefly.phase = firefly.since_flash = phase
+                    firefly.color_phase_ms = firefly.color_clock_ms = index * 4000
                     firefly.start()
                     if lossy:
                         firefly.beacon_elapsed = index * self.module.BEACON_MS // len(phases)
@@ -224,6 +286,23 @@ class FireflyTests(unittest.TestCase):
                     for firefly in group
                 ]
                 self.assertLessEqual(max(offsets) - min(offsets), 100)
+                color_offsets = [
+                    (firefly.color_phase_ms - group[0].color_phase_ms + 10000) % 20000 - 10000
+                    for firefly in group
+                ]
+                self.assertLessEqual(max(color_offsets) - min(color_offsets), self.module.BEACON_MS)
+                self.assertTrue(all(firefly.color_reference == group[0].identity for firefly in group))
+                with patch.object(sys, "path", [str(APP)] + sys.path):
+                    from palette import BrandPalette
+                colors = []
+                for firefly in group:
+                    palette = BrandPalette()
+                    palette.set_phase(firefly.color_phase_ms)
+                    colors.append(palette.rgb)
+                self.assertLessEqual(max(
+                    abs(channel - colors[0][index])
+                    for rgb in colors for index, channel in enumerate(rgb)
+                ), 12)
 
 
 if __name__ == "__main__":

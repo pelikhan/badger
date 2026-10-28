@@ -28,21 +28,35 @@ action, and HOME remains launcher-owned.
 ## Firefly synchronization
 
 Leave Quantum Diffusion open on nearby badges: their recurring center
-shockwaves gradually settle into a shared rhythm, without pairing, choosing
-a partner, a leader, or a Wi-Fi connection. A lone badge pulses about once
+shockwaves and brand colors gradually settle into a shared rhythm, without
+pairing, choosing a partner, or configuring Wi-Fi. A lone badge pulses about once
 every two seconds. Each badge starts at a device-specific phase, then gently
 advances or delays its oscillator toward the phases advertised by its neighbors.
 This is group synchronization, not the pair-oriented `badgeware.link.Link`
 connection workflow.
 
 The app uses `badgeware.link.radio` to scan and send non-connectable Bluetooth
-LE advertisements. Versioned, app-specific beacons carry only a badge ID,
-sequence number and oscillator phase; no profile, credentials or saved state
-is used. Beacons refresh every 200 ms. Each frame averages neighbor corrections
+LE advertisements. Versioned, app-specific beacons carry a badge ID, sequence
+number, pulse phase and shared color-clock phase/reference; no profile,
+credentials or saved state is used. Beacons refresh every 200 ms. Each frame averages neighbor corrections
 and limits the adjustment to 100 ms; a 250 ms refractory interval prevents
 immediate repeat flashes. Motion and touch still create local waves at their
-usual positions and do not reset or flood the shared rhythm. Brand colors
-continue cycling independently.
+usual positions and do not reset or flood the shared rhythm.
+
+The full 20-second brand-color cycle synchronizes, not just the current color
+name or the two-second flash phase. The lowest observed badge ID automatically
+provides a color-clock reference, forwarded through nearby badges with a hop
+count. Relays follow strictly closer references to avoid clock feedback loops
+and forward the reference clock rather than their still-converging display
+color. This also resolves groups that start evenly spaced across all five
+colors, where averaging circular phases could otherwise cancel out.
+The displayed palette slews toward that clock by at most 100 ms per frame,
+including backwards and across cycle wrap, without waiting for a flash.
+If the reference leaves, its local clock estimate continues advancing.
+
+Color-enabled version 2 beacons are 30-byte, manufacturer-only,
+non-connectable advertisements. Update every participating badge: original
+pulse-only version 1 beacons are ignored rather than misread as color data.
 
 Repeated, old, malformed, self and unrelated advertisements are ignored.
 At most 16 nearby badges and 16 queued beacons are retained, and silent
@@ -91,10 +105,12 @@ The wave palette smoothly cycles through these verified
 | Lime 2 | `#D3FA37` |
 
 Each transition takes four seconds; the complete loop takes 20 seconds and
-starts with GitHub Green. Color follows elapsed wall time, independent of
-simulation steps and frame rate. A preallocated 17-entry RGB565 palette is
-updated at most 20 times per second using integer interpolation, not per-cell
-color generation. The ARM raster and sensor service are unchanged.
+starts with GitHub Green. The standalone cycle follows elapsed wall time,
+independent of simulation steps and frame rate; nearby badges gently correct
+its phase. A preallocated 17-entry RGB565 palette uses 50 ms color-phase
+buckets and integer interpolation, not per-cell color generation. Its steady
+cycle updates at 20 Hz; phase alignment can refresh it once per rendered frame.
+The ARM raster and sensor service are unchanged.
 
 Amplitude still controls brightness: faint waves use dark shades, level 11
 matches the current anchor, and the strongest crests are lightened toward
@@ -305,13 +321,17 @@ are distinguished from human gesture and visual checks.
 
 ### Firefly verification
 
-Desktop regression tests cover group convergence from staggered and opposite
+Desktop regression tests cover pulse and full-color-cycle group convergence,
+including all five initial color anchors, staggered and opposite
 phases, bounded corrections, the refractory interval, packet validation,
 duplicate/out-of-order beacons, sequence/tick wraparound, missing neighbors,
-bounded queues and radio cleanup. Static app validation is separate from
+bounded queues, reference relaying and radio cleanup. Lossy multi-hop tests
+check color phase spread within one 200 ms beacon interval and RGB channels
+within 12 counts; this is approximate color alignment, not bit-identical
+pixels or a precise shared clock. Static app validation is separate from
 runtime or radio verification.
 
-On 28 October 2026, the connected GitHub Badger 2350 running MicroPython
+For the original pulse-only revision on 28 October 2026, the connected GitHub Badger 2350 running MicroPython
 1.29.0-preview confirmed the shared radio's actual call signatures:
 `open(handler)`, `advertise(owner, interval_us, adv_data=..., connectable=False)`
 and `scan(owner, duration_ms, interval_us, window_us)`. A bounded real-radio
@@ -331,7 +351,7 @@ These are automated launch/reopen and cleanup checks, not observations of a
 physical HOME press, finger touches or multiple badges.
 
 On physical badges, open the app at different times on at least three devices
-and watch their center waves converge while touch and motion remain responsive.
+and watch their center waves and brand hues converge while touch and motion remain responsive.
 Move one badge out of range, then bring it back; the others must keep pulsing
 and the returning badge must rejoin without pairing. Check both orientations,
 HOME/reopen, radio release for another Bluetooth app, frame rate and battery

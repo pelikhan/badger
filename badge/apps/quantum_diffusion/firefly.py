@@ -5,6 +5,7 @@ from machine import unique_id
 from time import ticks_diff, ticks_ms
 
 from badgeware import link
+from palette import CYCLE_MS
 
 
 PERIOD_MS = 2000
@@ -14,13 +15,16 @@ CORRECTION_MS = 100
 PEER_TIMEOUT_MS = 6000
 MAX_PEERS = 16
 MAX_MESSAGES = 16
-MAGIC = b"QF\x01"
-FLAGS = b"\x02\x01\x06"
+MAGIC = b"QF\x02"
 
 
-def advertisement(identity, sequence, phase):
-    data = b"\xff\xff" + MAGIC + identity + struct.pack("<HH", sequence, phase)
-    return FLAGS + bytes((len(data) + 1, 0xff)) + data
+def advertisement(identity, sequence, phase, color_phase, color_reference=None, color_hops=0):
+    if color_reference is None:
+        color_reference = identity
+    data = (b"\xff\xff" + MAGIC + identity
+            + struct.pack("<HHH", sequence, phase, color_phase)
+            + color_reference + bytes((color_hops,)))
+    return bytes((len(data) + 1, 0xff)) + data
 
 
 def read_beacon(payload):
@@ -30,12 +34,15 @@ def read_beacon(payload):
         end = offset + length + 1
         if not length or end > len(payload):
             return None
-        if (length == 18 and payload[offset + 1] == 0xff
+        if (length == 29 and payload[offset + 1] == 0xff
                 and payload[offset + 2:offset + 7] == b"\xff\xff" + MAGIC):
             identity = payload[offset + 7:offset + 15]
-            sequence, phase = struct.unpack("<HH", payload[offset + 15:end])
-            if phase < PERIOD_MS:
-                return identity, sequence, phase
+            sequence, phase, color_phase = struct.unpack("<HHH", payload[offset + 15:offset + 21])
+            if phase < PERIOD_MS and color_phase < CYCLE_MS:
+                reference = payload[offset + 21:offset + 29]
+                hops = payload[offset + 29]
+                if (reference == identity) == (hops == 0):
+                    return identity, sequence, phase, color_phase, reference, hops
             return None
         offset = end
     return None
@@ -48,6 +55,10 @@ class Fireflies:
             raise RuntimeError("Quantum firefly sync requires an eight-byte badge ID")
         self.phase = sum((index + 1) * byte for index, byte in enumerate(self.identity)) % PERIOD_MS
         self.since_flash = self.phase
+        self.color_phase_ms = 0
+        self.color_clock_ms = 0
+        self.color_reference = self.identity
+        self.color_hops = 0
         self.sequence = 0
         self.peers = {}
         self.pending = []
@@ -87,7 +98,10 @@ class Fireflies:
                     self.pending.append((beacon, ticks_ms()))
 
     def broadcast(self):
-        payload = advertisement(self.identity, self.sequence, self.phase)
+        payload = advertisement(
+            self.identity, self.sequence, self.phase,
+            self.color_clock_ms, self.color_reference, self.color_hops,
+        )
         link.radio.advertise(
             owner=link.APP, interval_us=100000, adv_data=payload, connectable=False,
         )
@@ -101,6 +115,8 @@ class Fireflies:
         phase = self.phase + elapsed
         fired = phase >= PERIOD_MS
         self.phase = phase % PERIOD_MS
+        self.color_phase_ms = (self.color_phase_ms + elapsed) % CYCLE_MS
+        self.color_clock_ms = (self.color_clock_ms + elapsed) % CYCLE_MS
         self.since_flash = self.phase if fired else min(PERIOD_MS, self.since_flash + elapsed)
         for identity in tuple(self.peers):
             if ticks_diff(now, self.peers[identity][1]) >= PEER_TIMEOUT_MS:
@@ -109,8 +125,9 @@ class Fireflies:
         pending = self.pending
         self.pending = []
         errors = {}
+        color_candidate = None
         for beacon, received_at in pending:
-            identity, sequence, phase = beacon
+            identity, sequence, phase, color_phase, color_reference, color_hops = beacon
             if identity == self.identity:
                 continue
             previous = self.peers.get(identity)
@@ -128,6 +145,24 @@ class Fireflies:
                 if error == -PERIOD_MS // 2 and identity > self.identity:
                     error = PERIOD_MS // 2
                 errors[identity] = error
+                # Follow a shared reference through strictly closer relays,
+                # rather than feeding delayed color clocks back around a loop.
+                if (color_hops < 255 and color_reference != self.identity
+                        and (color_reference < self.color_reference
+                             or (color_reference == self.color_reference
+                                 and color_hops < self.color_hops))):
+                    candidate = (color_reference, color_hops, identity, (color_phase + age) % CYCLE_MS)
+                    if color_candidate is None or candidate[:3] < color_candidate[:3]:
+                        color_candidate = candidate
+
+        if color_candidate is not None:
+            self.color_reference = color_candidate[0]
+            self.color_hops = color_candidate[1] + 1
+            self.color_clock_ms = color_candidate[3]
+        if self.color_reference != self.identity:
+            error = (self.color_clock_ms - self.color_phase_ms + CYCLE_MS // 2) % CYCLE_MS - CYCLE_MS // 2
+            correction = max(-CORRECTION_MS, min(CORRECTION_MS, error))
+            self.color_phase_ms = (self.color_phase_ms + correction) % CYCLE_MS
 
         if errors and self.since_flash >= REFRACTORY_MS:
             correction = sum(errors.values()) // (4 * len(errors))

@@ -290,6 +290,17 @@ class PaletteTests(unittest.TestCase):
         self.assertEqual(list(slow.colors), list(fast.colors))
         self.assertEqual(fast.phase_ms, slow.phase_ms)
 
+    def test_absolute_phase_can_move_backwards_and_wrap_without_reallocating(self):
+        palette = palettes.BrandPalette()
+        buffer = palette.colors
+        for phase in (8000, 7900, -50, palettes.CYCLE_MS + 100):
+            expected = palettes.BrandPalette()
+            expected.update(phase % palettes.CYCLE_MS)
+            palette.set_phase(phase)
+            self.assertEqual(palette.phase_ms, phase % palettes.CYCLE_MS)
+            self.assertEqual(list(palette.colors), list(expected.colors))
+            self.assertIs(palette.colors, buffer)
+
 
 class RuntimeTests(unittest.TestCase):
     def app(self, framebuffer_stride=640):
@@ -337,10 +348,12 @@ class RuntimeTests(unittest.TestCase):
         first, badge, _ = self.app()
         badge.ticks_delta = 25
         for _ in range(40):
+            first["clock"][0] += 25
             first["update"]()
         second, badge, _ = self.app()
         badge.ticks_delta = 10
         for _ in range(100):
+            second["clock"][0] += 10
             second["update"]()
         self.assertEqual(list(first["field"].current), list(second["field"].current))
         self.assertEqual(list(first["PALETTE"]), list(second["PALETTE"]))
@@ -357,6 +370,33 @@ class RuntimeTests(unittest.TestCase):
         pulse.assert_called_once_with(32, 24, physics.PULSE)
         self.assertEqual(app["source"], "FIREFLY")
         self.assertEqual(app["brand_palette"].phase_ms, 2000)
+
+    def test_palette_uses_shared_color_phase_instead_of_local_frame_delta(self):
+        app, badge, _ = self.app()
+        badge.ticks_delta = 25
+        app["fireflies"].color_phase_ms = 8000
+        app["update"]()
+        self.assertEqual(app["brand_palette"].phase_ms, 8000)
+        self.assertEqual(app["brand_palette"].rgb, palettes.BRAND_COLORS[2])
+
+    def test_received_color_clock_drives_the_actual_palette_in_both_directions(self):
+        app, badge, _ = self.app()
+        service = app["fireflies"]
+        packet = service.broadcast.__globals__["advertisement"](b"\x00" * 8, 1, service.phase, 8000)
+        service.receive(5, (0, b"abcdef", 0, -40, packet))
+        badge.ticks_delta = 25
+        for _ in range(90):
+            app["clock"][0] += 25
+            app["update"]()
+        self.assertEqual(app["brand_palette"].phase_ms, service.color_clock_ms)
+        expected = palettes.BrandPalette()
+        expected.set_phase(service.color_clock_ms)
+        self.assertEqual(list(app["PALETTE"]), list(expected.colors))
+        before = app["brand_palette"].phase_ms
+        packet = service.broadcast.__globals__["advertisement"](b"\x00" * 8, 2, service.phase, 1000)
+        service.receive(5, (0, b"abcdef", 0, -40, packet))
+        app["update"]()
+        self.assertEqual(app["brand_palette"].phase_ms, before - 100)
 
     def test_stalled_frame_has_bounded_catchup(self):
         app, badge, _ = self.app()

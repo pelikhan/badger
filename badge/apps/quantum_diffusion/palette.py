@@ -30,7 +30,10 @@ class BrandPalette:
         self.update(0)
 
     def update(self, elapsed_ms):
-        self.phase_ms = (self.phase_ms + max(0, elapsed_ms)) % CYCLE_MS
+        return self.set_phase(self.phase_ms + max(0, elapsed_ms))
+
+    def set_phase(self, phase_ms):
+        self.phase_ms = phase_ms % CYCLE_MS
         tick = self.phase_ms // UPDATE_MS
         if tick == self.last_tick:
             return False

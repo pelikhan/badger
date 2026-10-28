@@ -8,7 +8,7 @@ Apps for the GitHub Universe 2026 badge.
 | --- | --- |
 | [Factory Mindset](badge/apps/factory_mindset/) | A fifteen-scene animated text/vector story about programming with a phone and a cloud agent. |
 | [MicroCode](badge/apps/microcode/) | An offline, icon-based WHEN/DO programming editor with five pages, saved programs, animations, and badge sensors. |
-| [Quantum Diffusion](badge/apps/quantum_diffusion/) | Motion/touch waves and a no-pairing group firefly rhythm, with a cycling GitHub brand-color palette. |
+| [Quantum Diffusion](badge/apps/quantum_diffusion/) | Motion/touch waves and no-pairing group firefly synchronization of rhythm and GitHub brand colors. |
 
 Factory Mindset was migrated from the Home skills session's Factory mindset
 slideshow worktree. Quantum Diffusion was migrated from the Agent skills

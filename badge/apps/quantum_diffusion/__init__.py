@@ -57,10 +57,10 @@ def draw():
 
 def update():
     global accumulator, touch_mask
-    brand_palette.update(max(0, badge.ticks_delta))
     elapsed = max(0, min(100, badge.ticks_delta))
     if fireflies.update():
         pulse(field.width // 2, field.height // 2, label="FIREFLY")
+    brand_palette.set_phase(fireflies.color_phase_ms)
     impulse = motion.take()
 
     if impulse is not None:
