@@ -9,6 +9,7 @@ Apps for the GitHub Universe 2026 badge.
 | [Factory Mindset](badge/apps/factory_mindset/) | A fifteen-scene animated text/vector story about programming with a phone and a cloud agent. |
 | [MicroCode](badge/apps/microcode/) | An offline, icon-based WHEN/DO programming editor with five pages, saved programs, animations, and badge sensors. |
 | [Quantum Diffusion](badge/apps/quantum_diffusion/) | Motion/touch waves and no-pairing group firefly synchronization of rhythm and GitHub brand colors. |
+| [Tiny Inference](badge/apps/tiny_inference/) | Endless offline poems from a tiny trained int8 recurrent model, with native Cortex-M33 kernels and correctness/performance benchmarks. |
 
 Factory Mindset was migrated from the Home skills session's Factory mindset
 slideshow worktree. Quantum Diffusion was migrated from the Agent skills
@@ -27,7 +28,7 @@ copy its directory from `badge/apps/` into `apps/` on the badge's **BADGER**
 USB Disk Mode volume, then safely eject it. Do not copy `icon.png`,
 `secrets.py`, hidden files, caches, or bytecode. Never copy apps to the
 RP2350 firmware drive. Keep directory names unchanged:
-`factory_mindset`, `microcode`, and `quantum_diffusion` run from their respective
+`factory_mindset`, `microcode`, `quantum_diffusion`, and `tiny_inference` run from their respective
 `/system/apps/<name>` paths.
 
 Read each app's README for controls and firmware requirements. Factory Mindset
@@ -115,6 +116,14 @@ To have Copilot perform this workflow, ask **"Deploy all apps to my badge."**
 The repository's [deploy-all-apps skill](.github/skills/deploy-all-apps/SKILL.md)
 guides discovery, preview, deployment, ejection, and physical checks.
 
+Tiny Inference requires RP2350 ARM MicroPython with inline Thumb assembly and
+uses the launcher's default icon. It maps int8 dot products to M33 DSP
+instructions without a slow fallback and bundles a 13 KiB trained recurrent
+poetry model. It writes ongoing, bounded-memory couplets; MENU opens the
+benchmarks. Its README documents training provenance, limited vocabulary,
+prospective transformer budgets, native instruction emulation, and outstanding
+physical throughput/memory checks. It is not SmolLM or a general-purpose LLM.
+
 ## Development
 
 Run the host-side regression suite from the repository root:
@@ -161,6 +170,12 @@ Run the desktop solver benchmark:
 ```sh
 python3 tests/benchmark_quantum_diffusion.py
 ```
+
+For Tiny Inference, the host suite runs independent math and lifecycle
+references. Optional `mpy-cross`/Unicorn tests execute the app's actual compiled
+Thumb kernels on an emulated Cortex-M33; see its
+[verification instructions](badge/apps/tiny_inference/README.md#host-verification).
+Native throughput measurements run on the badge, not in the browser simulator.
 
 See [AGENTS.md](AGENTS.md) for collection conventions and the HYB26 skill's
 scaffolding, validation, and deployment workflow.

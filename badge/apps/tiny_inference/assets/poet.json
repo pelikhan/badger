@@ -1,0 +1,30 @@
+{
+  "architecture": "elman-hard-tanh-word-rnn",
+  "format": "tinypoet-v1",
+  "hidden": 64,
+  "model_sha256": "3ac7f8e7777db55162abfaffb40939e7b7b0d37e3c26a6ba5e63072268a2127d",
+  "quantization": {
+    "hidden_q": 6,
+    "logits_q": 4,
+    "readout_weight_q": 5,
+    "recurrent_weight_q": 6,
+    "rounding": "nearest-ties-away-from-zero"
+  },
+  "trainable_parameters": 12932,
+  "training": {
+    "batch_size": 64,
+    "corpus": "original-synthetic-couplets-v1",
+    "description": "Original 64-word banks; adjective noun verb preposition adjective noun, twice; no downloaded text.",
+    "held_out_argmax_category_accuracy": 0.999581,
+    "held_out_cross_entropy": 1.803731,
+    "held_out_poems": 512,
+    "numpy": "2.2.6",
+    "poems_seen": 102400,
+    "seed": 20261028,
+    "steps": 1600,
+    "torch": "2.7.1"
+  },
+  "vocabulary": 68,
+  "vocabulary_sha256": "b4b02690150d70c31426888a2036e7d2cfe80497453597af74cd6e9d5c57a7f4",
+  "weight_bytes": 13328
+}
