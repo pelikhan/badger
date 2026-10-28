@@ -12,11 +12,12 @@ sys.path.insert(0, APP_DIR)
 
 from benchmark import Benchmark, STEP_BUDGET_US
 from poet import Poet, wrap_lines
-from runtime import HEAP_RESERVE, memory_plan, require_heap
+from runtime import memory_plan, require_heap
 
 HOLD_MS = 6000
 FRAME_WORK_US = 4000
 ROWS_PER_FRAME = 8
+COLLECT_FRAMES = 8
 plan_kib = memory_plan()["total"] // 1024
 screen.font = font.nope
 background = color.rgb(13, 17, 23)
@@ -32,6 +33,8 @@ hold_ms = 0
 layout_key = None
 poem_rows = []
 maximum_slice_us = 0
+last_free_heap = None
+collection_frames = 0
 status = "Preparing word model"
 error = False
 native = None
@@ -57,6 +60,13 @@ def on_exit():
     cancel()
 
 
+def check_heap():
+    global last_free_heap
+    gc.collect()
+    last_free_heap = gc.mem_free()
+    require_heap(16 * 1024, last_free_heap)
+
+
 def advance_poem():
     global poet, worker, hold_ms, maximum_slice_us
     if paused:
@@ -64,16 +74,13 @@ def advance_poem():
     if poet is None:
         gc.collect()
         poet = Poet(native, random.getrandbits)
-    if gc.mem_free() < HEAP_RESERVE + 16 * 1024:
-        gc.collect()
-        require_heap(16 * 1024, gc.mem_free())
     if poet.complete:
         hold_ms = min(HOLD_MS, hold_ms + max(0, badge.ticks_delta))
         if hold_ms < HOLD_MS:
             return
+        check_heap()
         poet.restart()
         hold_ms = 0
-        gc.collect()
     if worker is None:
         worker = poet.step() if poet.ready else poet.prepare()
     frame_start = time.ticks_us()
@@ -93,7 +100,6 @@ def advance_poem():
             break
         if time.ticks_diff(time.ticks_us(), frame_start) >= FRAME_WORK_US:
             break
-    require_heap(0, gc.mem_free())
 
 
 def draw_poem():
@@ -107,7 +113,7 @@ def draw_poem():
         if key != layout_key:
             poem_rows = wrap_lines(poet.text, screen.width - 8, screen.measure_text)
             layout_key = key
-        line_height = screen.measure_text("Ag")[1] + 2
+        line_height = max(1, int(screen.measure_text("Ag")[1]) + 2)
         available = max(1, (screen.height - 30) // line_height)
         pages = max(1, (len(poem_rows) + available - 1) // available)
         page = min(pages - 1, hold_ms * pages // HOLD_MS) if poet.complete else pages - 1
@@ -129,7 +135,8 @@ def draw_dashboard():
     screen.pen = foreground
     lines = [
         status, "M33 DSP + int32 sums", "64-word neural poet",
-        "Free: %d KiB" % (gc.mem_free() // 1024),
+        "Heap: %d KiB (last)" % (last_free_heap // 1024)
+        if last_free_heap is not None else "Heap: checked on start",
         "Plan: %d KiB / 4 MiB" % plan_kib,
     ]
     if benchmark is not None and "dot_256" in benchmark.results:
@@ -142,19 +149,25 @@ def draw_dashboard():
 
 
 def update():
-    global worker, benchmark, status, error, mode, paused, hold_ms
+    global worker, benchmark, status, error, mode, paused, hold_ms, last_free_heap
+    global collection_frames
     try:
+        collection_frames = (collection_frames + 1) % COLLECT_FRAMES
+        if collection_frames == 0:
+            gc.collect()
         if native is not None:
             if badge.pressed(BUTTON_MENU):
                 cancel()
                 mode = "benchmarks" if mode == "poems" else "poems"
                 benchmark = None
+                check_heap()
                 status = "SELECT to run"
                 error = False
             elif badge.pressed(BUTTON_BACK):
                 cancel()
                 if mode == "poems":
                     if poet is not None:
+                        check_heap()
                         poet.restart()
                     hold_ms = 0
                     paused = False
@@ -169,6 +182,7 @@ def update():
                     gc.collect()
                     benchmark = Benchmark(native, time, gc.mem_free)
                     worker = benchmark.run()
+                    last_free_heap = benchmark.minimum_free
                     error = False
             if not error:
                 if mode == "poems":
@@ -178,6 +192,7 @@ def update():
                         status = benchmark.advance(worker)
                     except StopIteration:
                         cancel()
+                        last_free_heap = benchmark.minimum_free
                         status = "Complete; SELECT runs"
     except (AssertionError, MemoryError, OSError, RuntimeError, ValueError) as exception:
         cancel()

@@ -33,6 +33,18 @@ def _vector(buffer, length, name):
         raise ValueError(name + " must be a bytearray of length " + str(length))
 
 
+def _integer_array(buffer, itemsize, sentinel):
+    if not isinstance(buffer, array) or memoryview(buffer).itemsize != itemsize:
+        return False
+    # MicroPython lacks array.typecode; an empty slice retains the element format.
+    probe = buffer[:0]
+    try:
+        probe.append(sentinel)
+    except OverflowError:
+        return False
+    return type(probe[0]) is int and probe[0] == sentinel
+
+
 def signed(value):
     return value if value < 128 else value - 256
 
@@ -138,7 +150,7 @@ def rms_norm(inputs, gains, output, kernel):
     _vector(output, length, "output")
     if not length or length > 512 or length % 4:
         raise ValueError("RMSNorm width must be a multiple of four up to 512")
-    if not isinstance(gains, array) or gains.typecode != "h" or len(gains) != length:
+    if not _integer_array(gains, 2, -1) or len(gains) != length:
         raise ValueError("RMSNorm gains must be an int16 array matching its width")
     square_sum = kernel.dot(inputs, inputs, length)
     divisor = isqrt(((square_sum << 16) // length) + 65536)
@@ -150,9 +162,9 @@ def rms_norm(inputs, gains, output, kernel):
 def softmax_q15(scores, count, probabilities):
     """Q8 natural-log scores to Q15 probabilities with exact sum 32768."""
     _integer(count, "softmax count", 1, 128)
-    if not isinstance(scores, array) or scores.typecode != "i":
+    if not _integer_array(scores, 4, -1):
         raise ValueError("softmax scores must be an int32 array")
-    if not isinstance(probabilities, array) or probabilities.typecode != "H":
+    if not _integer_array(probabilities, 2, 65535):
         raise ValueError("softmax probabilities must be a uint16 array")
     if len(scores) < count or len(probabilities) < count:
         raise ValueError("softmax buffers are too small")
@@ -262,7 +274,7 @@ class DecoderBlock:
         if width % heads or (width // heads) % 4:
             raise ValueError("each decoder head must be a multiple of four")
         if len(gains) != 2 or any(
-            not isinstance(gain, array) or gain.typecode != "h" or len(gain) != width
+            not _integer_array(gain, 2, -1) or len(gain) != width
             for gain in gains
         ):
             raise ValueError("two matching int16 RMSNorm gain arrays required")

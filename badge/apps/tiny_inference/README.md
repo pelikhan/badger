@@ -64,9 +64,12 @@ penalty, and two-line framing constrain sampling.
 
 This is well below the 4 MiB app planning cap and the RP2350B's 8 MiB PSRAM,
 but actual firmware heap availability is still checked: creation must leave
-512 KiB free. Generation checks the reserve each active frame, collects
-between poems or when less than 16 KiB of extra headroom remains, and fails
-visibly if collection cannot recover enough free heap.
+512 KiB free. Between poems and at screen transitions, the app collects and
+checks for the reserve plus 16 KiB of headroom, failing visibly if it cannot
+recover enough. State and temporary work stay bounded between those checks.
+Collection every eight frames also reclaims temporary drawing/inference
+objects without scanning the heap for a free-byte count.
+The dashboard displays the last sampled heap, not a live per-frame scan.
 No floating-point training checkpoint, PyTorch, NumPy, tokenizer
 library or firmware extension is installed on the badge. Only the two small native
 projections, integer state updates and Q15 sampling run there.
@@ -228,7 +231,7 @@ Call `require_heap(plan["total"], gc.mem_free())` before future whole-model
 allocation. Cache/block constructors check their incremental allocation plus
 overhead against actual free heap and preserve a **512 KiB reserve**. The
 benchmark requires 128 KiB plus that reserve before allocating its small
-working set and checks sampled free heap between stages. Object allowances are
+working set and samples free heap at setup and completion. Object allowances are
 conservative estimates, not an exact MicroPython allocator accounting.
 
 One benchmark work slice runs per frame. Poetry runs at most eight native rows
@@ -236,10 +239,17 @@ per frame, stopping early after 4,000 us of accumulated inference/loading work;
 an individual slice over 16,000 us fails visibly. Initial allocations, drawing,
 firmware time and garbage collection are not included in that soft work budget.
 The reading timer uses bounded `badge.ticks_delta` accumulation and stops while
-paused or on the benchmark screen.
+paused or on the benchmark screen. On the tested firmware, `gc.mem_free()`
+alone takes about 55 ms: it scans the large heap. Full heap scans therefore
+run only during setup/completion and poem/screen transitions, never inside
+timed inference slices or ordinary drawing frames. Those maintenance frames
+can exceed 16 ms; the work-slice limit is not a full-frame latency guarantee.
+Garbage collection runs every eight frames outside the timed work slices;
+unlike `gc.mem_free()`, collection measured about 1.5 ms on this firmware.
 
 Correctness setup and matrix
-initialization yield incrementally; projections yield per row, attention per
+initialization yield incrementally; the small synthetic decoder is allocated
+before the timed worker starts. Projections yield per row, attention per
 score/channel. The dashboard times every generator advance with `ticks_us()`,
 records the maximum work-slice time and **stops with an explicit error if a
 slice exceeds 16,000 us**. This detects an overrun after it happens; it cannot
@@ -304,34 +314,55 @@ They do not substitute a handwritten copy of the kernels. The deliberately
 small parser rejects a changed MPY format. Generated MPY files are temporary,
 not app assets; deploy source so the badge uses its own firmware compiler.
 
-Current delivery evidence: static validator passes with the expected missing
-icon warning, all app modules cross-compile, and focused host/reference plus
-Cortex-M33 instruction-emulation tests pass. No Badge Simulator canvas is
-exposed by this client; browser simulation was not run and cannot validate the
-native kernels. No device connection, deployment or firmware flashing was
-performed. **Physical verification and real throughput/memory are outstanding.**
+Static validation passes with the expected missing-icon warning, all app modules
+cross-compile, and 52 focused host/reference plus Cortex-M33 instruction-emulation
+tests pass. No Badge Simulator canvas is exposed by this client; browser
+simulation was not run and cannot validate the native kernels.
 
-## Physical verification checklist (not yet performed)
+## Physical verification
 
-Use the skill's USB guide for any later, explicitly requested deployment.
-Copy only this app; do not install an icon or modify firmware/system apps.
+On October 28, 2026, the app was installed through USB Disk Mode with an
+existing-app backup. All nine installed files matched their source SHA-256
+hashes; no icon, launcher patch, unrelated app or firmware was installed.
+The tested badge runs MicroPython 1.29.0-preview, Badger build
+`v1.14-6911.g2e1a6ab1ed.dirty`, RP2350 ARM at 230 MHz.
 
-1. Confirm normal launcher entry on RP2350 ARM firmware, then MENU, SELECT and
-   capture all PASS/JSON lines. Check golden decoder outputs, free-heap reserve,
-   real maximum work slice and timing results; do not infer them from emulation.
-2. Confirm continuous neural poems, readable wrapping and the six-second
-   reading interval. SELECT must pause both typing and the interval; BACK
-   starts a new poem. Let many poems finish and verify free heap remains stable.
-   MENU must enter/leave benchmarks without retaining a partial word.
-3. Exercise BACK during benchmark correctness setup, matrix rows and decoder
-   attention, then SELECT again. Check no partial run survives and the rerun matches.
-4. Exercise HOME during loading, poems and benchmarks, reopen repeatedly, and check responsiveness
-   and recovered free heap after collection. Rotate both ways; verify readable
-   dashboard text and logical SELECT/BACK controls.
-5. Check full-context rejection and clear/retry through a small REPL harness
+Real-silicon native self-checks, the 64x256 matrix and golden decoder passed.
+A headless run generated 100 complete poems (1,400 tokens), with no forced
+boundaries; retained heap after collection differed by only 224 bytes between
+the first and hundredth poem. Median token compute was 58,252 us, excluding
+frame waits and rendering.
+
+The final installed-source display harness passed 2,864 actual firmware frames,
+including pause/resume, automatic next poem, skip, MENU state preservation,
+benchmark cancellation during setup/matrix/decoder and a complete rerun.
+Real font wrapping passed at 160x120 and 320x240. Missing model assets failed
+visibly with ENOENT and recovery generated words again. Controls were injected
+logical button events, not physical button presses.
+
+| Final installed-source measurement | Observed |
+| --- | ---: |
+| 1024-element dot, median batch of 16 checked calls | 2,925 us |
+| Checked dot throughput for that batch | 5.60 million MAC/s |
+| Matrix compute, excluding waits/reference | 31,315 us |
+| Three-token synthetic decoder compute | 195,006 us |
+| Maximum benchmark / poetry work slice | 7,019 / 8,854 us |
+| Median displayed interword interval | 384,175 us |
+| Minimum setup/completion sampled free heap | 8,140,864 bytes |
+| Free heap after harness cleanup | 8,208,032 bytes |
+
+These are measurements of this firmware and workload, not peak DSP throughput.
+The maximum full callback, including maintenance, was 244,178 us: the 16 ms
+limit applies to compute slices, not complete frames.
+
+### Remaining manual checks
+
+1. Press the physical controls and confirm human readability in both rotated
+   orientations; resolution changes alone do not prove orientation behavior.
+2. Exercise HOME during loading, poems and benchmarks, reopen from the normal
+   launcher repeatedly, and check recovered free heap.
+3. Check full-context rejection and clear/retry through a small REPL harness
    using `synthetic_block`; never overrun allocated K/V buffers. Exercise a
    low-free-heap rejection without deliberately exhausting the system.
-6. Record firmware version, CPU frequency, free heap, word generation latency,
-   dot/matrix/decoder times and maximum slice. Unsupported firmware or damaged
-   model assets must fail visibly, not execute a
-   slow fallback. Do not connect a second serial owner or change firmware.
+4. Confirm visible rejection on unsupported firmware without installing or
+   flashing other firmware. Do not connect a second serial owner.

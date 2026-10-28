@@ -125,6 +125,17 @@ class RuntimeTests(unittest.TestCase):
     def block(self):
         return benchmark.synthetic_block(self.kernel, width=8, hidden=16, context=4)
 
+    def test_integer_array_formats_without_typecode_and_without_mutation(self):
+        for itemsize, sentinel, expected in ((2, -1, "h"), (2, 65535, "H"), (4, -1, "i")):
+            for kind in ("b", "B", "h", "H", "i", "I", "f", "d"):
+                for values in ([], [1, 2, 3]):
+                    buffer = array(kind, values)
+                    original = buffer.tobytes()
+                    self.assertEqual(runtime._integer_array(buffer, itemsize, sentinel),
+                                     kind == expected, (itemsize, sentinel, kind))
+                    self.assertEqual(buffer.tobytes(), original)
+        self.assertFalse(runtime._integer_array(bytearray(4), 4, -1))
+
     def poet(self, seed=349):
         return poetry.Poet(self.kernel, random.Random(seed).getrandbits,
                            assets=str(APP / "assets"))
@@ -504,12 +515,16 @@ class RuntimeTests(unittest.TestCase):
 
         runner = benchmark.Benchmark(self.kernel, Clock(), lambda: 8 * 1024 * 1024)
         worker = runner.run()
-        with redirect_stdout(io.StringIO()):
+        with redirect_stdout(io.StringIO()), patch.object(
+            benchmark, "reference_dot", wraps=benchmark.reference_dot
+        ) as reference:
             while True:
                 try:
                     runner.advance(worker)
                 except StopIteration:
                     break
+        self.assertTrue(all(call.args[2] <= 256 for call in reference.call_args_list))
+        self.assertTrue(any(call.args[2] == 32 for call in reference.call_args_list))
         self.assertEqual(len(runner.results), 8)
         self.assertEqual(runner.results["decoder"]["tokens"], 3)
         closed = []
@@ -532,6 +547,38 @@ class RuntimeTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "exceeded 16 ms"):
             runner.advance(too_slow())
         self.assertEqual(closed, [True])
+
+    def test_slow_heap_scans_stay_outside_benchmark_work_slices(self):
+        class Clock:
+            now = 0
+
+            def ticks_us(self):
+                self.now += 1
+                return self.now
+
+            @staticmethod
+            def ticks_diff(end, start):
+                return end - start
+
+        clock = Clock()
+        scans = []
+
+        def slow_heap():
+            clock.now += 55000
+            scans.append(True)
+            return 8 * 1024 * 1024
+
+        with patch.object(runtime.gc, "mem_free", side_effect=slow_heap):
+            runner = benchmark.Benchmark(self.kernel, clock, slow_heap)
+            worker = runner.run()
+            with redirect_stdout(io.StringIO()):
+                while True:
+                    try:
+                        runner.advance(worker)
+                    except StopIteration:
+                        break
+        self.assertEqual(len(scans), 5)
+        self.assertLess(runner.maximum_quantum_us, benchmark.STEP_BUDGET_US)
 
 
 def native_module(thumb, address, platform="rp2", machine="Badger with RP2350",
@@ -748,9 +795,55 @@ class DashboardTests(unittest.TestCase):
         self.assertIsNone(app["worker"])
         self.assertEqual(closed, [True, True])
 
-    def test_poetry_collects_headroom_and_fails_visibly_if_exhausted(self):
+    def test_fractional_font_measurements_keep_integer_row_indices(self):
         app, _ = self.dashboard(ReferenceKernel())
         app["update"]()
+        app["screen"].measure_text = lambda text: (len(text) * 6.25, 8.25)
+        app["poet"].text = ("Mossy leaves breathe beside green seeds.",) * 2
+        app["poet"].complete = True
+        drawn = []
+        app["screen"].text = lambda text, x, y: drawn.append((text, x, y))
+        app["draw_poem"]()
+        self.assertTrue(drawn)
+        self.assertTrue(all(type(y) is int for _, _, y in drawn))
+        self.assertTrue(all(x + len(text) * 6.25 <= app["screen"].width
+                            for text, x, _ in drawn))
+        app["on_exit"]()
+
+    def test_heap_checks_happen_at_transitions_not_every_frame(self):
+        app, buttons = self.dashboard(ReferenceKernel())
+        app["update"]()
+        scans = []
+        app["gc"].mem_free = lambda: scans.append(True) or 8 * 1024 * 1024
+        for _ in range(20):
+            app["update"]()
+        self.assertEqual(scans, [])
+        buttons.add("MENU")
+        app["update"]()
+        buttons.clear()
+        for _ in range(20):
+            app["update"]()
+        self.assertEqual(scans, [True])
+        app["on_exit"]()
+
+    def test_frame_collection_bounds_garbage_without_full_heap_scans(self):
+        app, _ = self.dashboard(ReferenceKernel())
+        app["update"]()
+        collections = []
+        app["gc"].collect = lambda: collections.append(True)
+        app["gc"].mem_free = lambda: self.fail("ordinary frame scanned the heap")
+        for _ in range(24):
+            app["update"]()
+        self.assertEqual(len(collections), 3)
+        self.assertLess(app["collection_frames"], app["COLLECT_FRAMES"])
+        app["on_exit"]()
+
+    def test_poetry_collects_between_poems_and_fails_visibly_if_exhausted(self):
+        app, _ = self.dashboard(ReferenceKernel())
+        app["update"]()
+        app["cancel"]()
+        app["poet"].complete = True
+        app["hold_ms"] = app["HOLD_MS"]
         free = [runtime.HEAP_RESERVE - 1]
         collections = []
 
@@ -762,6 +855,9 @@ class DashboardTests(unittest.TestCase):
         app["update"]()
         self.assertEqual(collections, [True])
         self.assertFalse(app["error"])
+        app["cancel"]()
+        app["poet"].complete = True
+        app["hold_ms"] = app["HOLD_MS"]
         app["gc"] = SimpleNamespace(collect=lambda: None,
                                     mem_free=lambda: runtime.HEAP_RESERVE - 1)
         with redirect_stdout(io.StringIO()):

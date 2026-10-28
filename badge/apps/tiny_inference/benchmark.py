@@ -93,6 +93,11 @@ class Benchmark:
             worker.close()
             raise RuntimeError("work slice exceeded 16 ms: %d us" % elapsed)
         if finished:
+            self.sample_heap()
+            if "decoder" in self.results:
+                self.results["decoder"]["minimum_sampled_free"] = self.minimum_free
+                print("tiny_inference decoder " + json.dumps(self.results["decoder"]))
+                print("tiny_inference correctness PASS")
             self.results["scheduler"] = {
                 "maximum_quantum_us": self.maximum_quantum_us,
                 "quantums": self.quantums, "budget_us": STEP_BUDGET_US,
@@ -108,14 +113,23 @@ class Benchmark:
 
     def run(self):
         require_heap(128 * 1024, self.free_heap())
+        block = synthetic_block(self.kernel)
+        return self._run(block)
+
+    def _run(self, block):
         print("tiny_inference plan " + json.dumps(memory_plan()))
         yield from self_check(self.kernel)
-        self.sample_heap()
         print("tiny_inference kernels PASS")
         for count in (64, 128, 256, 512, 1024):
-            left = bytearray((index * 29) & 255 for index in range(count))
-            right = bytearray((index * 17 + 3) & 255 for index in range(count))
-            expected = reference_dot(left, right, count)
+            left = bytearray(count)
+            right = bytearray(count)
+            expected = 0
+            for offset in range(0, count, 32):
+                for index in range(offset, offset + 32):
+                    left[index] = (index * 29) & 255
+                    right[index] = (index * 17 + 3) & 255
+                expected += reference_dot(left, right, 32, offset, offset)
+                yield "Preparing dot %d" % count
             samples = []
             repetitions = 16
             for _ in range(9):
@@ -138,7 +152,6 @@ class Benchmark:
             }
             self.results["dot_%d" % count] = result
             print("tiny_inference dot " + json.dumps(result))
-            self.sample_heap()
 
         columns, rows = 256, 64
         weights = bytearray(columns * rows)
@@ -165,10 +178,8 @@ class Benchmark:
             "excludes_frame_waits_and_reference": True,
         }
         print("tiny_inference matrix " + json.dumps(self.results["matrix"]))
-        self.sample_heap()
         del linear, weights, inputs, output
 
-        block = synthetic_block(self.kernel)
         inputs = bytearray((index * 19 + 7) & 255 for index in range(16))
         compute_us = 0
         for token in range(3):
@@ -188,13 +199,10 @@ class Benchmark:
             if tuple(signed(value) for value in block.output) != EXPECTED_DECODER[token]:
                 raise AssertionError("synthetic decoder differs from the reference")
             inputs[:] = block.output
-            self.sample_heap()
         self.results["decoder"] = {
             "width": 16, "hidden": 32, "heads": 2, "tokens": 3,
             "compute_us": compute_us, "minimum_sampled_free": self.minimum_free,
             "checksum": sum(signed(value) for value in block.output),
             "synthetic_weights_not_text_generation": True,
         }
-        print("tiny_inference decoder " + json.dumps(self.results["decoder"]))
-        print("tiny_inference correctness PASS")
         yield "Complete"
