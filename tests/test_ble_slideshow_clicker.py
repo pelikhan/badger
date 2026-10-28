@@ -119,7 +119,7 @@ class ClickerTests(unittest.TestCase):
 
     def test_service_definition_and_security(self):
         self.assertEqual(self.ble.configuration, {
-            "gap_name": "Badger Clicker", "bond": True, "mitm": False,
+            "gap_name": "Badger Clicker", "mtu": 23, "bond": True, "mitm": False,
             "io": 3, "le_secure": False,
         })
         hid, device, battery = self.ble.services
@@ -149,6 +149,14 @@ class ClickerTests(unittest.TestCase):
         self.assertEqual(fields[3], b"\x12\x18")
         self.assertEqual(fields[0x19], b"\xc1\x03")
         self.assertEqual(fields[9], b"Badger Clicker")
+
+    def test_default_mtu_fits_reports_without_truncating_report_map(self):
+        self.assertEqual(self.ble.configuration["mtu"], 23)
+        self.assertLessEqual(len(clicker.EMPTY_REPORT), clicker.ATT_MTU - 3)
+        self.assertGreater(len(clicker.REPORT_MAP), clicker.ATT_MTU - 3)
+        report_map = next(handle for handle, value in self.ble.values.items()
+                          if value == clicker.REPORT_MAP)
+        self.assertEqual(self.ble.gatts_read(report_map), clicker.REPORT_MAP)
 
     def test_report_descriptor_matches_input_and_output_payload_sizes(self):
         sizes = {}

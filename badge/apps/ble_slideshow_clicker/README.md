@@ -120,6 +120,10 @@ payload excludes the report ID. Key-down and all-zero key-release are separated
 by at least 40 ms, with a 40 ms gap before the next tap. Boot/report selection
 and suspend/resume are honored; LED output is accepted but not displayed.
 Battery Service exposes the runtime's percentage, refreshed once per minute.
+The app requests ATT MTU 23: its eight-byte reports fit in the default
+20-byte payload, while hosts must use long reads for the Report Map.
+This is a diagnostic interoperability change; it is not yet a confirmed fix
+for the observed Mac failure.
 
 Device Information includes a descriptive manufacturer/model and the
 [pid.codes private test identity 1209:0001](https://pid.codes/1209/0001/).
@@ -178,6 +182,18 @@ with the permitted private-test identity, but the single explicitly approved
 retest still failed. The identity change is **not a confirmed fix or root
 cause**. Firmware Security Manager limitations and a macOS HID interoperability
 bug remain possibilities; the exact cause is unresolved.
+
+Further log analysis found an earlier error: macOS attempted to enable
+Service Changed indications on the firmware's built-in GATT service and
+reported that the characteristic did not support them.
+[Upstream MicroPython's BTstack backend](https://github.com/micropython/micropython/blob/d5f2fc239af2d69407170fa290ba6752c8f1790c/extmod/btstack/modbluetooth_btstack.c#L889-L906)
+registers 0x2A05 as read-only, without
+indications or a CCCD. The public Python registration API always preserves
+that built-in service, so changing app Device Information fields cannot
+repair it. This is a concrete interoperability defect, but its causal role
+in the macOS crash remains unconfirmed. The diagnostic build now limits
+MTU negotiation to 23 instead of the observed 527. This change has passed
+desktop tests and static checks only; it has not been deployed or paired.
 
 The controlled retest stopped after its first disconnect, disabled BLE, and
 reported the radio inactive. Do not treat successful advertising, a transient

@@ -6,6 +6,7 @@ import json
 import os
 
 NAME = "Badger Clicker"
+ATT_MTU = 23
 # pid.codes 1209:0001 is allowed for private testing only, not product shipment.
 PNP_ID = b"\x02\x09\x12\x01\x00\x00\x01"
 EMPTY_REPORT = bytes(8)
@@ -161,7 +162,9 @@ class Clicker:
             raise RuntimeError("BLE already active; close the other app first")
         self.owns_radio = True
         self.ble.active(True)
-        self.ble.config(gap_name=NAME)
+        # Eight-byte keyboard reports fit the default ATT payload. Keep
+        # negotiation small; the host reads the longer Report Map in chunks.
+        self.ble.config(gap_name=NAME, mtu=ATT_MTU)
         if callable(getattr(self.ble, "gap_pair", None)):
             try:
                 # NoInputNoOutput requests Just Works, not passkey entry.
