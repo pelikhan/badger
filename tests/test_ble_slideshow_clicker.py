@@ -136,6 +136,7 @@ class ClickerTests(unittest.TestCase):
         self.assertEqual(self.ble.values[self.app.input + 2], b"\x01\x01")
         self.assertIn(clicker.REPORT_MAP, self.ble.values.values())
         self.assertIn(b"\x01\x02", self.ble.values.values())
+        self.assertIn(b"\x02\x09\x12\x01\x00\x00\x01", self.ble.values.values())
 
     def test_advertisement_has_hid_appearance_and_name(self):
         data = clicker.ADVERTISEMENT

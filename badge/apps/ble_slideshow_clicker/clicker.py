@@ -6,6 +6,8 @@ import json
 import os
 
 NAME = "Badger Clicker"
+# pid.codes 1209:0001 is allowed for private testing only, not product shipment.
+PNP_ID = b"\x02\x09\x12\x01\x00\x00\x01"
 EMPTY_REPORT = bytes(8)
 KEYS = {"next": 0x4F, "previous": 0x50, "escape": 0x29, "blank": 0x05}
 MAX_SECRETS = 16
@@ -218,8 +220,7 @@ class Clicker:
             (self.boot_output, b"\x00"),
             (device[0], b"Badger community"),
             (device[1], b"Slideshow Clicker"),
-            # Prototype identity, not an allocated USB vendor/product ID.
-            (device[2], b"\x02\x00\x00\x00\x00\x00\x01"),
+            (device[2], PNP_ID),
         ):
             self.ble.gatts_write(handle, value)
         self._reset_reports()

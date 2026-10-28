@@ -2,6 +2,11 @@
 
 BLE Slideshow Clicker turns a compatible Badger into a wireless keyboard for navigating presentation slides.
 
+**Current hardware status:** deployment and launch succeeded, but connection
+to the tested MacBook Pro failed. macOS Bluetooth daemon crashes were observed.
+Do not retry on that Mac until the incompatibility is understood; see the
+physical test findings below. Advertising was stopped after testing.
+
 ## MacBook Pro setup
 
 1. Open this app on the badge. On the Mac, open **System Settings > Bluetooth**
@@ -19,8 +24,8 @@ BLE Slideshow Clicker turns a compatible Badger into a wireless keyboard for nav
    keyboard shortcuts and current keyboard layout.
 
 No Wi-Fi, network, `secrets.py`, app permissions, desktop receiver, or companion
-Mac application is needed for standard Bluetooth HID. **Actual MacBook Pro
-pairing and key delivery have not been verified.** Hardware or macOS security
+Mac application is needed for standard Bluetooth HID. **The tested MacBook Pro
+did not successfully pair, and key delivery remains unverified.** Hardware or macOS security
 policy can still reject the badge's firmware or an unencrypted connection.
 
 ## Controls and operation
@@ -76,7 +81,10 @@ though the app itself permits plaintext: an app cannot override host policy.
 
 ## Firmware requirements and limitations
 
-**The installed Badger firmware has not been inspected or verified.**
+The tested badge reports MicroPython 1.29.0-preview, build `badger`,
+`GitHub Badger 2350 with RP2350`. Its BLE object does not expose `gap_pair`
+or `gap_passkey`, so this build uses the app's unverified-security fallback.
+This observation does not establish compatibility of other firmware builds.
 The app uses MicroPython's low-level `bluetooth.BLE` in the badge frame loop,
 not a competing asyncio loop, `aioble`, or `badgeware.link`.
 
@@ -90,8 +98,7 @@ The Tufty upstream board selects **BTstack**. Current upstream MicroPython
 BTstack cannot supply a passkey response (`mp_bluetooth_gap_passkey` returns
 `EOPNOTSUPP`); this app no longer uses passkey entry. Pairing configuration and
 encryption/secret events are compile-time gated. Current upstream event
-handling also does not expose a Python Just Works confirmation API. If the
-installed build's Security Manager cannot finish the host's pairing exchange,
+handling also does not expose a Python Just Works confirmation API. If an installed build's Security Manager cannot finish the host's pairing exchange,
 removing authentication requirements in this app does **not** repair that
 firmware limitation. A timeout/rejection on the Mac remains a genuine
 firmware/host blocker, not evidence that plaintext fallback will work.
@@ -114,9 +121,12 @@ by at least 40 ms, with a 40 ms gap before the next tap. Boot/report selection
 and suspend/resume are honored; LED output is accepted but not displayed.
 Battery Service exposes the runtime's percentage, refreshed once per minute.
 
-Device Information includes a descriptive manufacturer/model and a prototype
-PnP value with **unallocated zero vendor/product IDs**, not a borrowed product
-identity. This is a community prototype, not a Bluetooth-qualified product
+Device Information includes a descriptive manufacturer/model and the
+[pid.codes private test identity 1209:0001](https://pid.codes/1209/0001/).
+This identity is **not universally unique** and is permitted only for private,
+in-house testing, not devices redistributed, sold, or manufactured. Obtain
+an appropriate assigned identity before any such distribution. This is a
+community prototype, not a Bluetooth-qualified product
 or a claim of full HOGP conformance. The intentionally public attributes and
 possible plaintext fallback deviate from HOGP's security requirements.
 
@@ -151,13 +161,33 @@ report descriptor/packets, pairing gates and insecure fallbacks, persistence,
 timing, protocol changes, disconnect/reconnect, failures and lifecycle.
 They cannot establish radio or macOS compatibility. The browser simulator
 cannot implement BLE HID. Static validation's missing-icon warning is
-intentional. No simulator pairing, deployment, or on-badge checks are claimed.
+intentional. No simulator pairing or successful keyboard delivery is claimed.
+
+### Physical findings, 2026-10-28
+
+The three app files were copied through USB Disk Mode, compared byte-for-byte,
+and safely ejected. The installed app launched and advertised; macOS displayed
+**Badger Clicker** as a keyboard. The Mac connected briefly and negotiated
+ATT MTU 527, then disconnected. No successful keyboard registration, report
+subscription, navigation keys, or bonded reconnection was established.
+
+The Mac's `bluetoothd` crash reports recorded `EXC_BAD_ACCESS` / `SIGSEGV`
+during connection attempts. The logs reached Device Information reads just
+before the crashes. The original zero vendor/product identity was replaced
+with the permitted private-test identity, but the single explicitly approved
+retest still failed. The identity change is **not a confirmed fix or root
+cause**. Firmware Security Manager limitations and a macOS HID interoperability
+bug remain possibilities; the exact cause is unresolved.
+
+The controlled retest stopped after its first disconnect, disabled BLE, and
+reported the radio inactive. Do not treat successful advertising, a transient
+BLE connection, or desktop tests as a working Mac slideshow clicker.
 
 Physical verification remains outstanding:
 
-1. Inspect the installed firmware's pairing/Security Manager support, then
-   deploy only this app through the skill's reviewed USB Disk Mode workflow.
-2. On the actual MacBook Pro, connect in System Settings > Bluetooth without
+1. Resolve the host crash and establish a compatible firmware/host combination
+   before another pairing attempt. Do not repeatedly retry a crashing host.
+2. With explicit permission for any further host testing, connect without
    a custom receiver, check the badge's honest security status, then check
    each shortcut in Keynote and PowerPoint with the slideshow focused.
 3. Check rapid taps, long holds, both orientations, suspend/resume, and
