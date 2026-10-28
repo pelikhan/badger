@@ -303,7 +303,7 @@ class PaletteTests(unittest.TestCase):
 
 
 class RuntimeTests(unittest.TestCase):
-    def app(self, framebuffer_stride=640):
+    def app(self, framebuffer_stride=640, width=320, height=240):
         pressed = set()
         touches = set()
         badge = SimpleNamespace(
@@ -318,14 +318,16 @@ class RuntimeTests(unittest.TestCase):
             touched=lambda key: key in touches,
         )
         screen = SimpleNamespace(
-            width=320, height=240, clip=(0, 0, 320, 240),
-            stride=framebuffer_stride, raw=bytearray(framebuffer_stride * 240),
+            width=width, height=height, clip=(0, 0, width, height),
+            stride=framebuffer_stride, raw=bytearray(framebuffer_stride * height),
             rectangle=lambda *args: None,
             line=lambda *args: None,
             text=lambda *args: None,
+            measure_text=lambda text: (len(text) * 6, 8),
         )
         context = {
             "badge": badge, "screen": screen,
+            "font": SimpleNamespace(nope=object()),
             "color": SimpleNamespace(rgb=lambda *args: args),
             "HIRES": 1, "VSYNC": 2, "run": lambda callback: None,
         }
@@ -471,19 +473,40 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(app["pulses"], 1)
         self.assertEqual(app["touch_mask"], 0)
 
-    def test_grid_fills_display_without_chrome_or_cursor(self):
+    def test_grid_fills_display_with_source_credit(self):
         app, _, _ = self.app()
         screen = app["screen"]
         screen.text = Mock()
         screen.line = Mock()
         screen.rectangle = Mock()
         app["update"]()
-        screen.text.assert_not_called()
+        screen.text.assert_called_once_with("pelikhan/badger", 115, 228)
         screen.line.assert_not_called()
         self.assertEqual((app["field"].width, app["field"].height), (64, 48))
         self.assertEqual((app["CELL"], app["LEFT"], app["TOP"]), (5, 0, 0))
-        screen.rectangle.assert_not_called()
+        screen.rectangle.assert_called_once_with(111, 226, 98, 12)
         self.assertTrue(any(screen.raw))
+
+    def test_source_credit_fits_both_orientations_and_survives_redraws(self):
+        for width, height in ((320, 240), (240, 320)):
+            with self.subTest(size=(width, height)):
+                app, _, _ = self.app(
+                    framebuffer_stride=width * 2, width=width, height=height)
+                screen = app["screen"]
+                draws = []
+                screen.text = lambda *args: draws.append((screen.pen, args))
+                screen.rectangle = Mock()
+                for _ in range(2):
+                    app["update"]()
+                self.assertEqual(draws, [
+                    ((128, 128, 128), ("pelikhan/badger", (width - 90) // 2, height - 12))
+                ] * 2)
+                for draw in screen.rectangle.call_args_list:
+                    x, y, w, h = draw.args
+                    self.assertGreaterEqual(x, 0)
+                    self.assertGreaterEqual(y, 0)
+                    self.assertLessEqual(x + w, width)
+                    self.assertLessEqual(y + h, height)
 
     def test_unsupported_framebuffer_layout_fails_explicitly(self):
         with self.assertRaisesRegex(RuntimeError, "RGB565 framebuffer"):

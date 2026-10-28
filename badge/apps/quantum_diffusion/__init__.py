@@ -19,6 +19,11 @@ motion = Sensors(badge)
 CELL = min(screen.width // field.width, screen.height // field.height)
 LEFT = (screen.width - field.width * CELL) // 2
 TOP = (screen.height - field.height * CELL) // 2
+screen.font = font.nope
+SOURCE_CREDIT = "pelikhan/badger"
+CREDIT_WIDTH, CREDIT_HEIGHT = screen.measure_text(SOURCE_CREDIT)
+CREDIT_BACKGROUND = color.rgb(0, 0, 0)
+CREDIT_PEN = color.rgb(128, 128, 128)
 
 
 brand_palette = BrandPalette()
@@ -53,6 +58,12 @@ def draw():
         field.current, PALETTE, screen.raw, field.width, field.height,
         CELL, LEFT, TOP, screen.stride // 2, motion.gain,
     )
+    x = (screen.width - CREDIT_WIDTH) // 2
+    y = screen.height - CREDIT_HEIGHT - 4
+    screen.pen = CREDIT_BACKGROUND
+    screen.rectangle(x - 4, y - 2, CREDIT_WIDTH + 8, CREDIT_HEIGHT + 4)
+    screen.pen = CREDIT_PEN
+    screen.text(SOURCE_CREDIT, x, y)
 
 
 def update():
