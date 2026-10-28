@@ -9,6 +9,7 @@ Apps for the GitHub Universe 2026 badge.
 | [Factory Mindset](badge/apps/factory_mindset/) | A fifteen-scene animated text/vector story about programming with a phone and a cloud agent. |
 | [MicroCode](badge/apps/microcode/) | An offline, icon-based WHEN/DO programming editor with five pages, saved programs, animations, and badge sensors. |
 | [Quantum Diffusion](badge/apps/quantum_diffusion/) | Full-screen waves triggered by motion and capacitive touches, with a cycling GitHub brand-color palette. |
+| [Tiny Inference](badge/apps/tiny_inference/) | Native Cortex-M33 int8 inference kernels, bounded decoder primitives, and synthetic correctness/performance benchmarks. |
 
 Factory Mindset was migrated from the Home skills session's Factory mindset
 slideshow worktree. Quantum Diffusion was migrated from the Agent skills
@@ -24,7 +25,7 @@ does not include firmware or a launcher fork.
 Copy an app's complete directory from `badge/apps/` into `apps/` on the
 badge's **BADGER** USB Disk Mode volume, then safely eject it. Never copy
 apps to the RP2350 firmware drive. Keep directory names unchanged:
-`factory_mindset`, `microcode`, and `quantum_diffusion` run from their respective
+`factory_mindset`, `microcode`, `quantum_diffusion`, and `tiny_inference` run from their respective
 `/system/apps/<name>` paths.
 
 Read each app's README for controls and firmware requirements. Factory Mindset
@@ -37,6 +38,12 @@ icons in code without PNG assets, and also intentionally uses the launcher's
 default icon. It saves drafts and three program slots under `/state`; sensor
 features require the corresponding firmware APIs. No app needs credentials or
 network access.
+
+Tiny Inference requires RP2350 ARM MicroPython with inline Thumb assembly and
+uses the launcher's default icon. It maps int8 dot products to M33 DSP
+instructions without a slow fallback; it includes no trained model or text
+generator. Its README distinguishes prospective memory budgets, native
+instruction emulation, and outstanding physical throughput/memory checks.
 
 ## Development
 
@@ -84,6 +91,12 @@ Run the desktop solver benchmark:
 ```sh
 python3 tests/benchmark_quantum_diffusion.py
 ```
+
+For Tiny Inference, the host suite runs independent math and lifecycle
+references. Optional `mpy-cross`/Unicorn tests execute the app's actual compiled
+Thumb kernels on an emulated Cortex-M33; see its
+[verification instructions](badge/apps/tiny_inference/README.md#host-verification).
+Native throughput measurements run on the badge, not in the browser simulator.
 
 See [AGENTS.md](AGENTS.md) for collection conventions and the HYB26 skill's
 scaffolding, validation, and deployment workflow.
