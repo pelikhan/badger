@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MicroCode · U26 MicroPython simulator</title>
+<style>
+  :root { color-scheme: dark; font: 15px system-ui, sans-serif; background: #0c131e; color: #eef5ff; }
+  body { max-width: 1050px; margin: auto; padding: 28px; }
+  h1 { font-size: 30px; margin-bottom: 6px; }
+  p { color: #90a3bb; line-height: 1.6; }
+  a { color: #41c0e4; }
+  main { display: grid; grid-template-columns: minmax(320px, 640px) 1fr; gap: 24px; }
+  canvas { width: 100%; aspect-ratio: 4/3; image-rendering: pixelated; border: 1px solid #2e3d50; border-radius: 12px; }
+  button { background: #1d2a3c; color: #eef5ff; border: 1px solid #43536b; border-radius: 6px; padding: 12px 16px; cursor: pointer; font: inherit; }
+  button:focus-visible { outline: 2px solid #ffcc50; }
+  button.active { background: #43536b; }
+  .pad { display: grid; grid-template-columns: repeat(3, 70px); gap: 7px; justify-content: center; margin: 16px; }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+  pre { background: #111c2c; padding: 14px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflow: auto; font-size: 12px; }
+  #status { color: #74de96; }
+  .badge { display: inline-block; font-size: 11px; border: 1px solid #2e3d50; border-radius: 20px; padding: 4px 10px; color: #41c0e4; }
+  @media(max-width: 800px) { main { grid-template-columns: 1fr; } }
+</style>
+<span class="badge">REAL MICROPYTHON · WEBASSEMBLY · NO USB</span>
+<h1>MicroCode on your badge</h1>
+<p>Build rules with icons. Run them on the official
+  <a href="https://badger.github.io/simulator/" target="_blank" rel="noreferrer">U26 simulator runtime</a>.
+  This page hosts that runtime, not a JavaScript reimplementation of the app.</p>
+<main>
+  <section>
+    <canvas id="screen" width="320" height="240" tabindex="0" aria-label="MicroCode badge display"></canvas>
+    <div class="pad">
+      <span></span><button data-bit="2048" aria-label="Up">↑</button><span></span>
+      <button data-bit="256" aria-label="Left">←</button>
+      <button data-bit="1024" aria-label="Select">Select</button>
+      <button data-bit="512" aria-label="Right">→</button>
+      <span></span><button data-bit="4096" aria-label="Down">↓</button><span></span>
+    </div>
+    <div class="actions">
+      <button data-bit="8192">Back / stop</button><button data-bit="16384">Menu</button>
+      <button id="restart">Restart</button><button id="rotate">Rotate</button>
+    </div>
+    <p>Arrows move · Enter/Space selects · K or Backspace goes back · U opens Menu.
+      Edits and three save slots persist in this browser.</p>
+  </section>
+  <aside>
+    <h2 id="status">Loading MicroPython…</h2>
+    <p>Editor: WHEN event + condition, DO command + arguments. Save from the editor,
+      load from Home. Examples include Counter, Flashing heart, and Hot potato.</p>
+    <p><strong>Hardware limits:</strong> motion is upright unless simulated below;
+      light, touch, battery and LEDs are firmware stubs. No physical behavior is verified.</p>
+    <div class="actions">
+      <button id="shake">Simulate shake</button><button id="tilt">Simulate tilt right</button>
+    </div>
+    <h3>MicroPython output</h3><pre id="output" aria-live="polite"></pre>
+    <p><a href="/bundle.py" download="microcode_simulator.py">Download one-file loader</a>
+      for the official editor (app folder name: <strong>microcode</strong>).</p>
+  </aside>
+</main>
+<script type="module">
+const canvas = document.querySelector('#screen');
+const output = document.querySelector('#output');
+const status = document.querySelector('#status');
+let worker, mask = 0, rotated = false, firstFrame = false;
+window.microcodeState = null;
+window.microcodeLog = [];
+function log(text) {
+  window.microcodeLog.push(text);
+  if (window.microcodeLog.length > 200) window.microcodeLog.shift();
+  output.textContent = window.microcodeLog.filter(x => !x.startsWith('MICROCODE_STATE ')).slice(-40).join('\n');
+}
+function setButton(bit, held) {
+  mask = held ? mask | bit : mask & ~bit;
+  worker?.postMessage({buttons: mask | (rotated ? 32768 : 0)});
+  document.querySelectorAll('[data-bit]').forEach(button => button.classList.toggle('active', !!(mask & +button.dataset.bit)));
+}
+window.microcodePress = async (bit, duration = 100) => {
+  setButton(bit, true);
+  await new Promise(resolve => setTimeout(resolve, duration));
+  setButton(bit, false);
+  await new Promise(resolve => setTimeout(resolve, 100));
+  return window.microcodeState;
+};
+async function savedPrograms() {
+  const db = await new Promise((resolve, reject) => {
+    const request = indexedDB.open('badger.editor.runtime', 1);
+    request.onupgradeneeded = () => request.result.createObjectStore('files');
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  try {
+    return await new Promise((resolve, reject) => {
+      const files = [];
+      const request = db.transaction('files').objectStore('files').openCursor();
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) return resolve(files);
+        if (/^\/state\/microcode_(draft|[123])\.json$/.test(String(cursor.key))) {
+          if (typeof cursor.value.text !== 'string') return reject(Error('Invalid saved simulator file: ' + cursor.key));
+          files.push({name: cursor.key, content: cursor.value.text});
+        }
+        cursor.continue();
+      };
+      request.onerror = () => reject(request.error);
+    });
+  } finally { db.close(); }
+}
+async function start() {
+  worker?.terminate();
+  firstFrame = false;
+  status.textContent = 'Loading MicroPython…';
+  window.microcodeLog = [];
+  window.microcodeState = null;
+  const request = await (await fetch('/request.json')).json();
+  // The official worker journals user files but does not restore them on boot.
+  // Stage only this app's four saved programs; do not alter the firmware worker.
+  request.files.push(...await savedPrograms());
+  request.files.forEach(file => { file.content = new TextEncoder().encode(file.content); });
+  const url = URL.createObjectURL(new Blob(
+    ['import "https://badger.github.io/simulator/micropython.worker.js";'],
+    {type: 'text/javascript'}));
+  worker = new Worker(url, {type: 'module'});
+  worker.onerror = event => { status.textContent = 'Runtime error'; log(event.message); };
+  worker.onmessage = ({data}) => {
+    if (data.ready) {
+      worker.postMessage({buttons: mask | (rotated ? 32768 : 0)});
+      worker.postMessage(request);
+    }
+    if (data.bootError || data.failed) status.textContent = 'Runtime error';
+    if (data.bootError) log(data.bootError);
+    if (data.stdout) {
+      const text = String(data.stdout);
+      if (text.startsWith('MICROCODE_STATE ')) {
+        try { window.microcodeState = JSON.parse(text.slice(16)); } catch(error) { log(String(error)); }
+      }
+      log(text);
+    }
+    if (data.frame) {
+      const frame = data.frame;
+      canvas.width = frame.width;
+      canvas.height = frame.height;
+      canvas.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(frame.buffer), frame.width, frame.height), 0, 0);
+      if (!firstFrame) { status.textContent = 'Running · MicroPython'; firstFrame = true; URL.revokeObjectURL(url); }
+    }
+    if (data.completed && status.textContent !== 'Runtime error') status.textContent = 'Stopped';
+  };
+}
+for (const button of document.querySelectorAll('[data-bit]')) {
+  button.addEventListener('pointerdown', event => { button.setPointerCapture(event.pointerId); setButton(+button.dataset.bit, true); });
+  for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) button.addEventListener(name, () => setButton(+button.dataset.bit, false));
+  button.addEventListener('keydown', event => {
+    if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setButton(+button.dataset.bit, true); }
+  });
+  button.addEventListener('keyup', () => setButton(+button.dataset.bit, false));
+}
+const keys = {ArrowUp:2048, ArrowDown:4096, ArrowLeft:256, ArrowRight:512, Enter:1024, ' ':1024, k:8192, Backspace:8192, u:16384};
+document.addEventListener('keydown', event => {
+  if (event.target.closest('button')) return;
+  if (keys[event.key]) { event.preventDefault(); setButton(keys[event.key], true); }
+});
+document.addEventListener('keyup', event => { if (keys[event.key]) setButton(keys[event.key], false); });
+window.addEventListener('blur', () => { mask=0; worker?.postMessage({buttons:rotated ? 32768 : 0}); });
+document.querySelector('#restart').onclick = start;
+document.querySelector('#rotate').onclick = () => { rotated=!rotated; worker.postMessage({buttons:mask | (rotated ? 32768 : 0)}); };
+document.querySelector('#tilt').onclick = () => {
+  worker.postMessage({motion:[16000,0,12000,0,0,0]});
+  setTimeout(() => worker.postMessage({motion:null}), 800);
+};
+document.querySelector('#shake').onclick = async () => {
+  for (const x of [20000,-20000,20000]) {
+    worker.postMessage({motion:[x,0,16384,0,0,0]});
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  worker.postMessage({motion:null});
+};
+start().catch(error => { status.textContent='Runtime error'; log(String(error)); });
+</script>
+</html>
