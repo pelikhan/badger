@@ -66,10 +66,70 @@ frame-time stalls are capped to 100 ms so the reader does not miss entire scenes
 
 ## Install
 
-Copy this **entire folder**, including `factory_player.py` and `factory_slides.py`,
-into `apps/factory_mindset/` on the BADGER USB Disk Mode volume.
-Some firmware exposes `system/apps/` instead. Never copy to the RP2350
-bootloader drive. Safely eject BADGER and open **Factory Mindset** in the menu.
+### Deploy to a badge
+
+Use Python 3.10+ and an installed
+[HYB26 skill](https://github.com/badger/home/tree/main/.github/skills/hyb26-skill).
+Run these commands from this repository's root on macOS/Linux:
+
+```sh
+scripts="$HOME/.copilot/skills/hyb26-skill/scripts"
+```
+
+Adjust `scripts` if the skill is installed elsewhere; its tools are not bundled
+with this app. Serial access requires `mpremote`; if missing, install it with
+`python3 -m pip install mpremote` (use a virtual environment if required).
+
+Connect the badge with a data-capable USB-C cable and close other serial clients.
+Discover its port, then enter USB Disk Mode:
+
+```sh
+python3 "$scripts/badge_serial.py" port
+python3 "$scripts/badge_serial.py" disk-mode
+```
+
+Connecting can interrupt the running app. Never run serial operations in
+parallel. Alternatively, open the badge's **Mass Storage** app or double-tap
+RESET; wait for the **BADGER** volume. `/system` is normally read-only over
+serial. Never copy apps to the **RP2350** bootloader drive.
+
+Preview the destination, validation warnings, and file list before copying:
+
+```sh
+# Preview only; no files are written.
+python3 "$scripts/deploy_app.py" badge/apps/factory_mindset --replace
+
+# After reviewing the preview, install or update this app only.
+python3 "$scripts/deploy_app.py" badge/apps/factory_mindset --replace --write
+```
+
+`--replace` preserves an existing installation in a timestamped
+`.badge-app-backups` directory on BADGER before replacing it. Omit it from both
+commands to refuse overwrites. Backups consume device space and are not
+automatically pruned. Other apps and saved state are left untouched.
+If automatic volume discovery is ambiguous, add `--mount /path/to/BADGER`
+to both commands.
+
+The helper installs the entire app, including `factory_player.py` and
+`factory_slides.py`, under `BADGER/apps/factory_mindset` (or
+`BADGER/system/apps/factory_mindset` on some firmware), which maps to
+`/system/apps/factory_mindset`. Keep the folder name unchanged. It excludes
+`secrets.py`, hidden files, caches, and bytecode; never add or deploy `icon.png`
+or credentials. Do not copy firmware, system apps, or the stock font.
+
+Flush and safely eject, then wait for the badge to restart:
+
+```sh
+python3 "$scripts/badge_serial.py" eject
+```
+
+Open **Factory Mindset** from the launcher. If the badge does not restart after
+BADGER disappears, press RESET. Follow the [physical acceptance checklist](#physical-acceptance-checklist);
+successful validation or copying alone does not verify playback on hardware.
+
+On Windows, use `python` instead of `python3`, assign
+`$scripts = "$HOME\.copilot\skills\hyb26-skill\scripts"` in PowerShell, and use
+backslashes in script paths, for example `python "$scripts\badge_serial.py" eject`.
 
 No custom launcher icon is included, per the user's request. The firmware may
 show its default generic tile. The menu is intentionally left unchanged; no
