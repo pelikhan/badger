@@ -102,7 +102,7 @@ handling also does not expose a Python Just Works confirmation API. If an instal
 removing authentication requirements in this app does **not** repair that
 firmware limitation. A timeout/rejection on the Mac remains a genuine
 firmware/host blocker, not evidence that plaintext fallback will work.
-No firmware patching, flashing, or system-file modification is performed.
+Installing this app does not patch firmware or modify system files.
 
 Other BLE apps must release the singleton radio before launch. This app
 refuses to overwrite an already active radio's services or IRQ handler.
@@ -138,10 +138,30 @@ reference RP2 NimBLE port uses the UART HCI interface; the CYW43 transport
 used here is wired through the BTstack port. A replacement needs transport
 integration as well as compatible badge runtime/radio modules.
 
-No firmware image has been built or flashed. A safe board-specific patch
-and build remain blocked on the custom **GitHub Badger 2350** source/build
-configuration and its actual dependency revisions. Stock Tufty firmware
-must not be substituted for that custom hardware.
+At the user's direction, public Tufty compatibility was assumed for a separate
+**offline experimental build**, not established for the physical badge.
+The candidate replaces the Service Changed stub with an indication-only
+characteristic and per-connection CCCDs, schedules full-range invalidation,
+cleans up disconnected sessions, and prevents database replacement while
+connected. It registers a separate Security Manager handler, confirms Just
+Works only after explicit NoInputNoOutput configuration without MITM, and
+rejects unsupported passkey/numeric-comparison requests. ER/IR roots are
+random per BLE activation; the device database remains memory-only, so
+**persistent bonding is not implemented**.
+
+The patched Tufty target cross-compiles, and native ATT/pairing-policy
+regressions exercise the firmware helper and real ATT database engine.
+The patches, source revisions, checksums, and code-only UF2 are maintained
+separately from this app collection. This is not a custom Badger release:
+the UF2 has no bundled ROMFS/filesystem, and replacing the runtime can break
+existing apps or badge-specific APIs. It is not a deployment-ready update.
+The upstream UF2 also includes an RP2350-E10 compatibility block targeting
+the last flash page; preservation of existing device data is unverified.
+Neither build success nor the compatibility assumption establishes that
+the patch prevents the Mac crash. No firmware has been flashed and no
+additional host connection attempt has been made. An exact-source Badger
+build remains preferable; flashing and another crash-risk Mac test require
+separate informed approval.
 
 ## HID and bonding implementation
 
