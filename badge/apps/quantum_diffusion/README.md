@@ -6,9 +6,10 @@ Quantum Diffusion turns motion, touch and a synchronized firefly rhythm into pix
 
 Open **Quantum Diffusion** from the badge menu. An opening pulse lights the
 field, then the app responds to motion and capacitive touches alongside a
-periodic firefly pulse. The entire
-display is the wave grid: no title, footer, hints, status labels, borders
-or cursor overlay.
+periodic firefly pulse. The wave grid fills the display, with a small
+`pelikhan/badger` source credit at the bottom pointing to the
+[source repository](https://github.com/pelikhan/badger). There are no other
+titles, hints, status labels, borders or cursor overlays.
 
 | Input | Action |
 | --- | --- |
