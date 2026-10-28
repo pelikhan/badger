@@ -1,11 +1,12 @@
 # Quantum Diffusion
 
-Quantum Diffusion turns motion and capacitive touches into pixelated shockwaves that cycle through GitHub brand colors.
+Quantum Diffusion turns motion, touch and a synchronized firefly rhythm into pixelated shockwaves that cycle through GitHub brand colors.
 
 ## Usage
 
 Open **Quantum Diffusion** from the badge menu. An opening pulse lights the
-field, then the app responds to motion and capacitive touches. The entire
+field, then the app responds to motion and capacitive touches alongside a
+periodic firefly pulse. The entire
 display is the wave grid: no title, footer, hints, status labels, borders
 or cursor overlay.
 
@@ -22,7 +23,50 @@ Each newly touched pad produces one wave; holding it does not continuously
 fire. Release and touch again to repeat. Multiple pads can trigger together.
 Touch actions follow the firmware's logical orientation, so UP stays at the
 top of the displayed grid when inverted. Physical button presses have no app
-action, and HOME remains launcher-owned. There is no automatic demonstration.
+action, and HOME remains launcher-owned.
+
+## Firefly synchronization
+
+Leave Quantum Diffusion open on nearby badges: their recurring center
+shockwaves and brand colors gradually settle into a shared rhythm, without
+pairing, choosing a partner, or configuring Wi-Fi. A lone badge pulses about once
+every two seconds. Each badge starts at a device-specific phase, then gently
+advances or delays its oscillator toward the phases advertised by its neighbors.
+This is group synchronization, not the pair-oriented `badgeware.link.Link`
+connection workflow.
+
+The app uses `badgeware.link.radio` to scan and send non-connectable Bluetooth
+LE advertisements. Versioned, app-specific beacons carry a badge ID, sequence
+number, pulse phase and shared color-clock phase/reference; no profile,
+credentials or saved state is used. Beacons refresh every 200 ms. Each frame averages neighbor corrections
+and limits the adjustment to 100 ms; a 250 ms refractory interval prevents
+immediate repeat flashes. Motion and touch still create local waves at their
+usual positions and do not reset or flood the shared rhythm.
+
+The full 20-second brand-color cycle synchronizes, not just the current color
+name or the two-second flash phase. The lowest observed badge ID automatically
+provides a color-clock reference, forwarded through nearby badges with a hop
+count. Relays follow strictly closer references to avoid clock feedback loops
+and forward the reference clock rather than their still-converging display
+color. This also resolves groups that start evenly spaced across all five
+colors, where averaging circular phases could otherwise cancel out.
+The displayed palette slews toward that clock by at most 100 ms per frame,
+including backwards and across cycle wrap, without waiting for a flash.
+If the reference leaves, its local clock estimate continues advancing.
+
+Color-enabled version 2 beacons are 30-byte, manufacturer-only,
+non-connectable advertisements. Update every participating badge: original
+pulse-only version 1 beacons are ignored rather than misread as color data.
+
+Repeated, old, malformed, self and unrelated advertisements are ignored.
+At most 16 nearby badges and 16 queued beacons are retained, and silent
+neighbors expire after six seconds. Excess traffic is dropped rather than
+building a backlog. Missing packets or neighbors do not stop the local rhythm;
+nearby badges are incorporated again as beacons return. Bluetooth scheduling,
+frame timing, radio range and interference limit accuracy: this is gradual
+visual synchronization, not simultaneous delivery or a precise shared clock.
+Advertisements are unauthenticated and provide no trusted identity.
+Bluetooth scanning/advertising uses additional battery power.
 
 Wait about 0.2 seconds after opening for motion calibration. Resting gravity
 is filtered out; a shake needs about 0.35 g of changing acceleration and a
@@ -61,10 +105,12 @@ The wave palette smoothly cycles through these verified
 | Lime 2 | `#D3FA37` |
 
 Each transition takes four seconds; the complete loop takes 20 seconds and
-starts with GitHub Green. Color follows elapsed wall time, independent of
-simulation steps and frame rate. A preallocated 17-entry RGB565 palette is
-updated at most 20 times per second using integer interpolation, not per-cell
-color generation. The ARM raster and sensor service are unchanged.
+starts with GitHub Green. The standalone cycle follows elapsed wall time,
+independent of simulation steps and frame rate; nearby badges gently correct
+its phase. A preallocated 17-entry RGB565 palette uses 50 ms color-phase
+buckets and integer interpolation, not per-cell color generation. Its steady
+cycle updates at 20 Hz; phase alignment can refresh it once per rendered frame.
+The ARM raster and sensor service are unchanged.
 
 Amplitude still controls brightness: faint waves use dark shades, level 11
 matches the current anchor, and the strongest crests are lightened toward
@@ -101,7 +147,8 @@ Fixed 25 ms integration steps, a stable spatial coefficient of 204/1024
 (below the 2-D CFL limit of 0.5), damping, absorbing edge bands and a
 12-unit amplitude clamp preserve stability. Signed truncation towards zero
 avoids a negative rounding bias. A frame catches up at most four steps after
-a stall. No network, credentials, external hardware or saved state is required.
+a stall. No Wi-Fi, credentials, external hardware or saved state is required;
+group synchronization requires the 2026 firmware's shared Bluetooth radio.
 There are no menus, cursor controls or physical-button actions;
 launcher-owned HOME behavior is unchanged.
 
@@ -109,15 +156,82 @@ The timer temporarily owns the verified 2026 firmware's `_poll_imu` hook.
 It calls the original hook outside rendering and leaves cached readings
 available to the runtime; regular button polling remains untouched. This
 avoids concurrent I2C reads and double consumption of read-to-clear events.
-`on_exit()` stops the timer and restores the hook before HOME/reopen.
+`on_exit()` stops the timer, restores the hook and closes the shared radio
+before HOME/reopen.
 Sensor I/O errors stop the service and surface an explicit app error.
+Radio initialization and I/O errors also surface rather than silently
+pretending synchronization is active.
 
 ## Install
 
-Copy this entire `quantum_diffusion` directory into `apps/` on the badge's
-**BADGER** USB Disk Mode volume, then safely eject it. Never copy to the
-RP2350 firmware drive. No custom menu icon is included; the launcher uses its
-default icon.
+### Deploy to a badge
+
+Use Python 3.10+ and an installed
+[HYB26 skill](https://github.com/badger/home/tree/main/.github/skills/hyb26-skill).
+Run these commands from this repository's root on macOS/Linux:
+
+```sh
+scripts="$HOME/.copilot/skills/hyb26-skill/scripts"
+```
+
+Adjust `scripts` if the skill is installed elsewhere; its tools are not bundled
+with this app. Serial access requires `mpremote`; if missing, install it with
+`python3 -m pip install mpremote` (use a virtual environment if required).
+
+Connect the badge with a data-capable USB-C cable and close other serial clients.
+Discover its port, then enter USB Disk Mode:
+
+```sh
+python3 "$scripts/badge_serial.py" port
+python3 "$scripts/badge_serial.py" disk-mode
+```
+
+Connecting can interrupt the running app. Never run serial operations in
+parallel. Alternatively, open the badge's **Mass Storage** app or double-tap
+RESET; wait for the **BADGER** volume. `/system` is normally read-only over
+serial. Never copy apps to the **RP2350** bootloader drive.
+
+Preview the destination, validation warnings, and file list before copying:
+
+```sh
+# Preview only; no files are written.
+python3 "$scripts/deploy_app.py" badge/apps/quantum_diffusion --replace
+
+# After reviewing the preview, install or update this app only.
+python3 "$scripts/deploy_app.py" badge/apps/quantum_diffusion --replace --write
+```
+
+`--replace` preserves an existing installation in a timestamped
+`.badge-app-backups` directory on BADGER before replacing it. Omit it from both
+commands to refuse overwrites. Backups consume device space and are not
+automatically pruned. Other apps and saved state are left untouched.
+If automatic volume discovery is ambiguous, add `--mount /path/to/BADGER`
+to both commands.
+
+The helper installs the entire app, including all six Python files, under
+`BADGER/apps/quantum_diffusion` (or `BADGER/system/apps/quantum_diffusion` on
+some firmware), which maps to `/system/apps/quantum_diffusion`. Keep the folder
+name unchanged. It excludes `secrets.py`, hidden files, caches, and bytecode;
+never add or deploy `icon.png` or credentials. Do not patch the menu or copy
+firmware or system apps. The launcher's default icon and the validator's
+missing-icon warning are intentional.
+
+Flush and safely eject, then wait for the badge to restart:
+
+```sh
+python3 "$scripts/badge_serial.py" eject
+```
+
+Open **Quantum Diffusion** from the launcher. If the badge does not restart
+after BADGER disappears, press RESET. Check motion, touch, ambient-light
+response, both orientations, and HOME/reopen on the badge. Deploy the same
+version to every participating badge and follow the
+[firefly verification checklist](#firefly-verification) for group rhythm and
+color convergence; copying or simulator checks cannot verify radio behavior.
+
+On Windows, use `python` instead of `python3`, assign
+`$scripts = "$HOME\.copilot\skills\hyb26-skill\scripts"` in PowerShell, and use
+backslashes in script paths, for example `python "$scripts\badge_serial.py" eject`.
 
 ## Browser and validation
 
@@ -131,8 +245,10 @@ silent unaccelerated fallback. The CPython test path executes the identical
 stencil using signed memoryviews instead of native pointers.
 
 The browser simulator is not proof of native emitter/timer support and was
-not used for hardware verification. Load all five Python files if exploring
+not used for hardware verification. Load all six Python files if exploring
 it; simulator builds lacking those firmware facilities cannot run this app.
+The simulator's `badgeware.link` stub does not provide the shared broadcast
+radio and cannot exercise firefly synchronization.
 
 From the repository root:
 
@@ -180,6 +296,9 @@ The benchmark restores cached pad state after every update and never injects
 HOME. Omit the option for comparison with the earlier motion-only workloads.
 
 ### Measured on the physical badge
+
+The measurements below predate firefly synchronization and do not establish
+performance with Bluetooth scanning/advertising enabled.
 
 On 28 October 2026, the connected GitHub Badger RP2350 at its existing
 230 MHz clock ran MicroPython 1.29.0-preview (13 October 2026 build).
@@ -263,3 +382,42 @@ Physical verification remains necessary for human-observed shake/twist
 sensitivity, light changes, both orientations, HOME and
 re-opening. Automated hardware timings and injected sensor/control inputs
 are distinguished from human gesture and visual checks.
+
+### Firefly verification
+
+Desktop regression tests cover pulse and full-color-cycle group convergence,
+including all five initial color anchors, staggered and opposite
+phases, bounded corrections, the refractory interval, packet validation,
+duplicate/out-of-order beacons, sequence/tick wraparound, missing neighbors,
+bounded queues, reference relaying and radio cleanup. Lossy multi-hop tests
+check color phase spread within one 200 ms beacon interval and RGB channels
+within 12 counts; this is approximate color alignment, not bit-identical
+pixels or a precise shared clock. Static app validation is separate from
+runtime or radio verification.
+
+For the original pulse-only revision on 28 October 2026, the connected GitHub Badger 2350 running MicroPython
+1.29.0-preview confirmed the shared radio's actual call signatures:
+`open(handler)`, `advertise(owner, interval_us, adv_data=..., connectable=False)`
+and `scan(owner, duration_ms, interval_us, window_us)`. A bounded real-radio
+probe advertised and scanned concurrently for 4.5 seconds, emitted two local
+flashes and released the application radio handler, advertiser and scanner.
+No other Quantum badges were seen. This confirms the API and single-device
+execution, not radio reception or group convergence. No simulator or
+multi-badge firefly verification has been performed.
+
+The app was installed through USB Disk Mode with the previous version backed
+up. Two bounded launches through the real firmware launcher ran for 6.5
+seconds each, rendering 132 and 142 frames and generating three firefly waves
+per launch while the sensor timer collected 657 and 654 samples. Both runs
+restored the IMU hook, stopped the timer and released the radio handler,
+advertiser and scanner on return. The second launch used a fresh app instance.
+These are automated launch/reopen and cleanup checks, not observations of a
+physical HOME press, finger touches or multiple badges.
+
+On physical badges, open the app at different times on at least three devices
+and watch their center waves and brand hues converge while touch and motion remain responsive.
+Move one badge out of range, then bring it back; the others must keep pulsing
+and the returning badge must rejoin without pairing. Check both orientations,
+HOME/reopen, radio release for another Bluetooth app, frame rate and battery
+use. Confirm that Contacts, Pong and unrelated BLE advertisements do not
+affect the rhythm. Physical group verification remains outstanding.

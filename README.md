@@ -8,7 +8,7 @@ Apps for the GitHub Universe 2026 badge.
 | --- | --- |
 | [Factory Mindset](badge/apps/factory_mindset/) | A fifteen-scene animated text/vector story about programming with a phone and a cloud agent. |
 | [MicroCode](badge/apps/microcode/) | An offline, icon-based WHEN/DO programming editor with five pages, saved programs, animations, and badge sensors. |
-| [Quantum Diffusion](badge/apps/quantum_diffusion/) | Full-screen waves triggered by motion and capacitive touches, with a cycling GitHub brand-color palette. |
+| [Quantum Diffusion](badge/apps/quantum_diffusion/) | Motion/touch waves and no-pairing group firefly synchronization of rhythm and GitHub brand colors. |
 | [Tiny Inference](badge/apps/tiny_inference/) | Endless offline poems from a tiny trained int8 recurrent model, with native Cortex-M33 kernels and correctness/performance benchmarks. |
 
 Factory Mindset was migrated from the Home skills session's Factory mindset
@@ -22,22 +22,99 @@ does not include firmware or a launcher fork.
 
 ## Install
 
-Copy an app's complete directory from `badge/apps/` into `apps/` on the
-badge's **BADGER** USB Disk Mode volume, then safely eject it. Never copy
-apps to the RP2350 firmware drive. Keep directory names unchanged:
+Use [Deploy the whole collection](#deploy-the-whole-collection) to install
+or update every app with validation and backups. To install just one app,
+copy its directory from `badge/apps/` into `apps/` on the badge's **BADGER**
+USB Disk Mode volume, then safely eject it. Do not copy `icon.png`,
+`secrets.py`, hidden files, caches, or bytecode. Never copy apps to the
+RP2350 firmware drive. Keep directory names unchanged:
 `factory_mindset`, `microcode`, `quantum_diffusion`, and `tiny_inference` run from their respective
 `/system/apps/<name>` paths.
 
 Read each app's README for controls and firmware requirements. Factory Mindset
 uses the stock `MonaSans-Medium.af` font and native HIRES text/vector drawing.
 Quantum Diffusion requires 2026 RP2350 firmware with Viper, soft timer callbacks,
-a writable RGB565 framebuffer, and the firmware's `_poll_imu` hook. It
+a writable RGB565 framebuffer, the firmware's `_poll_imu` hook, and
+`badgeware.link.radio` for connectionless Bluetooth firefly synchronization. It
 does not have a portable simulator fallback. Both apps intentionally use the
 launcher's default icon. MicroCode uses the stock `font.sins` font, draws its
 icons in code without PNG assets, and also intentionally uses the launcher's
 default icon. It saves drafts and three program slots under `/state`; sensor
-features require the corresponding firmware APIs. No app needs credentials or
-network access.
+features require the corresponding firmware APIs. No app needs credentials,
+Wi-Fi or internet access.
+
+### Deploy the whole collection
+
+The [bulk deployment script](tools/deploy_all.py) requires Python 3.10+ and
+an installed [hyb26-skill](https://github.com/badger/home/tree/main/.github/skills/hyb26-skill).
+Run the following commands from this repository root.
+
+**Connect the badge.** Close other serial clients and connect with a
+data-capable USB-C cable. Enter USB Disk Mode using the badge's Mass Storage
+app or by double-tapping RESET, then wait for the **BADGER** volume.
+Alternatively, use the skill's serial tools:
+
+```sh
+scripts="$HOME/.copilot/skills/hyb26-skill/scripts"
+python3 "$scripts/badge_serial.py" port
+python3 "$scripts/badge_serial.py" disk-mode
+```
+
+Adjust `scripts` if the skill is installed elsewhere. Serial access requires
+`mpremote`; install it with `python3 -m pip install mpremote` if missing.
+Connecting can interrupt the running app. Never run serial operations in parallel.
+
+**Preview, then deploy.** Review the selected apps, destination, warnings, and
+file lists before running the second command:
+
+```sh
+# Dry run: validate all apps without writing to BADGER.
+python3 tools/deploy_all.py --replace
+
+# Copy all apps, backing up any installed versions.
+python3 tools/deploy_all.py --replace --write
+```
+
+| Option | Behavior |
+| --- | --- |
+| `--write` | Copy files; without this flag, only preview the deployment. |
+| `--replace` | Preserve timestamped backups of existing apps before replacing them; omit to refuse overwrites. |
+| `--mount /path/to/BADGER` | Select a mounted volume when automatic discovery is ambiguous. |
+| `--skill-scripts /path/to/hyb26-skill/scripts` | Use a skill installation outside the default locations. |
+
+The script discovers app directories under `badge/apps/`, validates and
+preflights the entire batch before any writes, then delegates sequential
+copies to the skill's `deploy_app.py`. Both `BADGER/apps` and
+`BADGER/system/apps` are supported. The skill is discovered under
+`.github/skills/hyb26-skill/scripts` or `~/.copilot/skills/hyb26-skill/scripts`.
+
+Unrelated installed apps and saved state are left untouched. Icons and
+app-local `secrets.py` are rejected; hidden files, caches, and bytecode are
+excluded by the skill. No menu patches or firmware changes are performed.
+A write failure stops the batch but does not roll back earlier apps; inspect
+the reported failure before retrying. Backups remain in `.badge-app-backups`
+on BADGER, consume device space, and are never automatically pruned.
+
+**Eject and check the apps.** The script never switches device modes or ejects
+automatically. Set `scripts` to the installed skill's scripts directory as
+above, then flush and eject:
+
+```sh
+python3 "$scripts/badge_serial.py" eject
+```
+
+Wait for normal badge startup, then follow each app's README physical
+acceptance checklist. Static validation and copying do not establish
+on-badge behavior.
+
+On Windows, use `python` instead of `python3`, PowerShell's
+`$scripts = "$HOME\.copilot\skills\hyb26-skill\scripts"` assignment, and
+`python "$scripts\badge_serial.py" eject` for the eject command. Pass the
+BADGER drive path to `--mount` if needed.
+
+To have Copilot perform this workflow, ask **"Deploy all apps to my badge."**
+The repository's [deploy-all-apps skill](.github/skills/deploy-all-apps/SKILL.md)
+guides discovery, preview, deployment, ejection, and physical checks.
 
 Tiny Inference requires RP2350 ARM MicroPython with inline Thumb assembly and
 uses the launcher's default icon. It maps int8 dot products to M33 DSP
