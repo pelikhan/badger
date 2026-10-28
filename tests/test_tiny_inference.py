@@ -1,8 +1,11 @@
 """Host references and optional execution of the actual mpy-cross Thumb output."""
 
 from array import array
+import gc
 import importlib.util
 import io
+import itertools
+import json
 import math
 import os
 from pathlib import Path
@@ -30,6 +33,7 @@ def load(name, file, modules=None):
 
 runtime = load("tiny_inference_runtime", "runtime.py")
 benchmark = load("tiny_inference_benchmark", "benchmark.py", {"runtime": runtime})
+poetry = load("tiny_inference_poet", "poet.py", {"runtime": runtime})
 
 
 def decode(buffer):
@@ -54,9 +58,9 @@ class ReferenceKernel:
 
     @staticmethod
     def dot(left, right, count, left_offset=0, right_offset=0):
-        a = decode(left[left_offset:left_offset + count])
-        b = decode(right[right_offset:right_offset + count])
-        return sum(x * y for x, y in zip(a, b))
+        return sum((a if a < 128 else a - 256) * (b if b < 128 else b - 256)
+                   for a, b in zip(left[left_offset:left_offset + count],
+                                   right[right_offset:right_offset + count]))
 
     @staticmethod
     def requantize(value, shift):
@@ -112,7 +116,7 @@ def block_reference(block, inputs, keys, values):
 
 class RuntimeTests(unittest.TestCase):
     def setUp(self):
-        self.heap = patch.object(runtime.gc, "mem_free", return_value=8 * 1024 * 1024,
+        self.heap = patch.object(gc, "mem_free", return_value=8 * 1024 * 1024,
                                  create=True)
         self.heap.start()
         self.addCleanup(self.heap.stop)
@@ -120,6 +124,176 @@ class RuntimeTests(unittest.TestCase):
 
     def block(self):
         return benchmark.synthetic_block(self.kernel, width=8, hidden=16, context=4)
+
+    def poet(self, seed=349):
+        return poetry.Poet(self.kernel, random.Random(seed).getrandbits,
+                           assets=str(APP / "assets"))
+
+    def test_poet_model_integrity_and_allocation(self):
+        poet = self.poet()
+        list(poet.prepare())
+        self.assertTrue(poet.ready)
+        self.assertEqual(len(poet.recurrent.weights) + len(poet.readout.weights), 13328)
+        buffers = (poet.recurrent.weights, poet.recurrent.shifts, poet.readout.weights,
+                   poet.readout.shifts, poet.inputs, poet.hidden, poet.next_hidden,
+                   poet.output_inputs, poet.logits, poet.scores, poet.probabilities)
+        payload = sum(len(b) * (b.itemsize if isinstance(b, array) else 1) for b in buffers)
+        self.assertEqual(payload, 14268)
+        with patch.object(runtime.gc, "mem_free", return_value=runtime.HEAP_RESERVE):
+            with self.assertRaises(MemoryError):
+                self.poet()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            valid_manifest = (APP / "assets/poet.json").read_bytes()
+            path.joinpath("poet.json").write_bytes(valid_manifest)
+            valid = (APP / "assets/poet.bin").read_bytes()
+            for corrupted in (valid[:-1], valid + b"x", b"xxxx" + valid[4:],
+                              valid[:100] + bytes([valid[100] ^ 1]) + valid[101:]):
+                path.joinpath("poet.bin").write_bytes(corrupted)
+                broken = poetry.Poet(self.kernel, random.Random(1).getrandbits, assets=directory)
+                with self.assertRaises(ValueError):
+                    list(broken.prepare())
+                self.assertFalse(broken.busy)
+                self.assertFalse(broken.ready)
+            path.joinpath("poet.bin").write_bytes(valid)
+            wrong_vocabulary = json.loads(valid_manifest)
+            wrong_vocabulary["vocabulary_sha256"] = "0" * 64
+            for invalid in ("[]", "{", " " * 4097, json.dumps(wrong_vocabulary)):
+                path.joinpath("poet.json").write_text(invalid)
+                broken = poetry.Poet(self.kernel, random.Random(1).getrandbits, assets=directory)
+                with self.assertRaises(ValueError):
+                    list(broken.prepare())
+                self.assertFalse(broken.busy)
+            path.joinpath("poet.json").unlink()
+            broken = poetry.Poet(self.kernel, random.Random(1).getrandbits, assets=directory)
+            with self.assertRaises(OSError):
+                list(broken.prepare())
+
+    def test_poet_native_projection_matches_independent_integer_equations(self):
+        poet = self.poet()
+        list(poet.prepare())
+        for _ in range(14):
+            expected_hidden = [max(-64, min(64, value)) for value in
+                               projected(poet.recurrent, decode(poet.inputs))]
+            expected_inputs = expected_hidden + [64, 0, 0, 0]
+            expected_logits = projected(poet.readout, expected_inputs)
+            list(poet.step())
+            self.assertEqual(decode(poet.hidden), expected_hidden)
+            self.assertEqual(decode(poet.logits), expected_logits)
+            self.assertEqual(decode(poet.inputs[poetry.VOCABULARY:
+                                               poetry.VOCABULARY + poetry.HIDDEN]),
+                             expected_hidden)
+            if poet.complete:
+                break
+
+    def test_poet_cancellation_every_yield_and_reentrancy(self):
+        baseline = self.poet()
+        list(baseline.prepare())
+        count = len(list(baseline.step()))
+        expected = (bytes(baseline.hidden), baseline.text)
+        self.assertEqual(count, poetry.HIDDEN + poetry.VOCABULARY)
+        poet = self.poet()
+        list(poet.prepare())
+        for stop in range(count + 1):
+            poet.restart()
+            poet.random_bits = random.Random(349).getrandbits
+            before = bytes(poet.inputs)
+            task = poet.step()
+            for _ in range(stop):
+                next(task)
+            if stop:
+                with self.assertRaises(RuntimeError):
+                    next(poet.step())
+                with self.assertRaises(RuntimeError):
+                    poet.restart()
+            task.close()
+            self.assertFalse(poet.busy)
+            self.assertEqual(bytes(poet.inputs), before)
+            self.assertEqual(poet.hidden, bytearray(poetry.HIDDEN))
+            self.assertEqual(poet.text, ())
+            list(poet.step())
+            self.assertEqual((bytes(poet.hidden), poet.text), expected)
+        partial = self.poet()
+        task = partial.prepare()
+        next(task)
+        task.close()
+        self.assertFalse(partial.busy)
+        self.assertFalse(partial.ready)
+        list(partial.prepare())
+        self.assertTrue(partial.ready)
+
+    def test_poet_endless_generation_is_bounded_and_learned(self):
+        poet = self.poet()
+        list(poet.prepare())
+        buffers = tuple(id(b) for b in (poet.inputs, poet.hidden, poet.next_hidden,
+                                       poet.recurrent.weights, poet.readout.weights,
+                                       poet.scores, poet.probabilities, poet.logits))
+        grammar = (poetry.ADJECTIVES, poetry.NOUNS, poetry.VERBS, poetry.PREPOSITIONS,
+                   poetry.ADJECTIVES, poetry.NOUNS)
+        valid_lines, total_lines = 0, 0
+        examples = set()
+        poems = 200 if isinstance(self.kernel, ReferenceKernel) else 4
+        for _ in range(poems):
+            tokens = 0
+            while not poet.complete:
+                list(poet.step())
+                tokens += 1
+                self.assertLessEqual(tokens, 2 * (poetry.MAX_WORDS + 1))
+                self.assertLessEqual(len(poet.words), poetry.MAX_WORDS)
+                self.assertLessEqual(len(poet.selected), 2 * poetry.MAX_WORDS)
+                self.assertLessEqual(len(poet.lines), 2)
+                self.assertLessEqual(len(poet.text), 2)
+            for line in poet.text:
+                words = line[:-1].lower().split()
+                self.assertTrue(3 <= len(words) <= poetry.MAX_WORDS)
+                valid_lines += len(words) == 6 and all(w in group for w, group in zip(words, grammar))
+                total_lines += 1
+            if len(examples) < 20:
+                examples.add(poet.text)
+            self.assertEqual(tuple(id(b) for b in (poet.inputs, poet.hidden, poet.next_hidden,
+                                                  poet.recurrent.weights, poet.readout.weights,
+                                                  poet.scores, poet.probabilities, poet.logits)), buffers)
+            poet.restart()
+        self.assertGreaterEqual(valid_lines / total_lines, 0.9)
+        self.assertGreater(len(examples), min(10, poems - 1))
+        poet.number = 999999
+        poet.restart()
+        self.assertEqual(poet.number, 1)
+
+    def test_poet_sampling_failure_rolls_back(self):
+        poet = self.poet()
+        list(poet.prepare())
+        before = bytes(poet.inputs)
+        poet.random_bits = lambda bits: -1
+        with self.assertRaises(ValueError):
+            list(poet.step())
+        self.assertFalse(poet.busy)
+        self.assertEqual(bytes(poet.inputs), before)
+        self.assertEqual(poet.text, ())
+
+    def test_poet_forced_boundaries_prevent_unbounded_lines(self):
+        poet = self.poet()
+        list(poet.prepare())
+        poet.readout.weights[:] = bytearray(len(poet.readout.weights))
+        poet.random_bits = lambda bits: 0
+        count = 0
+        while not poet.complete:
+            list(poet.step())
+            count += 1
+            self.assertLessEqual(count, 2 * (poetry.MAX_WORDS + 1))
+        self.assertEqual(poet.forced_boundaries, 2)
+        self.assertEqual([len(line.split()) for line in poet.text], [8, 8])
+
+    def test_poem_wrap_uses_measured_width(self):
+        measure = lambda text: (len(text) * 6, 8)
+        paragraphs = ("Drifting tides dream beneath distant harbors.",) * 2
+        wrapped = poetry.wrap_lines(paragraphs, 152, measure)
+        self.assertIn("", wrapped)
+        self.assertTrue(all(measure(line)[0] <= 152 for line in wrapped))
+        with self.assertRaises(ValueError):
+            poetry.wrap_lines(paragraphs, 0, measure)
+        with self.assertRaises(ValueError):
+            poetry.wrap_lines(paragraphs, 1, measure)
 
     def test_rounding_and_integer_square_root(self):
         for value in range(-257, 258):
@@ -412,19 +586,26 @@ class NativeBoundaryTests(unittest.TestCase):
 
 
 class DashboardTests(unittest.TestCase):
+    def setUp(self):
+        guard = patch.object(gc, "mem_free", return_value=8 * 1024 * 1024,
+                             create=True)
+        guard.start()
+        self.addCleanup(guard.stop)
+
     def dashboard(self, native):
         source = (APP / "__init__.py").read_text()
         screen = SimpleNamespace(
             width=160, height=120, clip=None,
             text=lambda *args: None, rectangle=lambda *args: None,
+            measure_text=lambda text: (len(text) * 6, 8),
         )
         buttons = set()
-        ticks = iter(range(10000))
+        ticks = itertools.count()
         namespace = {
             "screen": screen, "font": SimpleNamespace(nope=None),
             "color": SimpleNamespace(rgb=lambda *args: args),
-            "badge": SimpleNamespace(pressed=lambda button: button in buttons),
-            "BUTTON_SELECT": "SELECT", "BUTTON_BACK": "BACK",
+            "badge": SimpleNamespace(pressed=lambda button: button in buttons, ticks_delta=16),
+            "BUTTON_SELECT": "SELECT", "BUTTON_BACK": "BACK", "BUTTON_MENU": "MENU",
             "run": lambda callback: None,
         }
         with patch.dict(sys.modules, {
@@ -432,6 +613,11 @@ class DashboardTests(unittest.TestCase):
             "sys": SimpleNamespace(path=[], print_exception=lambda exc: None),
             "gc": SimpleNamespace(collect=lambda: None, mem_free=lambda: 8 * 1024 * 1024),
             "benchmark": benchmark, "runtime": runtime, "native": native,
+            "poet": SimpleNamespace(
+                Poet=lambda kernel, bits: poetry.Poet(kernel, bits, assets=str(APP / "assets")),
+                wrap_lines=poetry.wrap_lines,
+            ),
+            "random": random.Random(389),
             "time": SimpleNamespace(ticks_us=lambda: next(ticks),
                                     ticks_diff=lambda end, start: end - start),
         }), redirect_stdout(io.StringIO()):
@@ -448,10 +634,28 @@ class DashboardTests(unittest.TestCase):
 
     def test_cancel_exit_and_visible_failure(self):
         app, buttons = self.dashboard(ReferenceKernel())
+        app["update"]()
+        self.assertIsNotNone(app["worker"])
+        buttons.add("SELECT")
+        app["update"]()
+        self.assertTrue(app["paused"])
+        self.assertIsNotNone(app["worker"])
+        buttons.clear()
+        buttons.add("BACK")
+        app["update"]()
+        self.assertEqual(app["poet"].number, 2)
+        self.assertFalse(app["paused"])
+        buttons.clear()
+        buttons.add("MENU")
+        app["update"]()
+        self.assertEqual(app["mode"], "benchmarks")
+        self.assertIsNone(app["worker"])
+        buttons.clear()
         buttons.add("SELECT")
         with redirect_stdout(io.StringIO()):
             app["update"]()
         self.assertIsNotNone(app["worker"])
+        buttons.clear()
         buttons.add("BACK")
         app["update"]()
         self.assertIsNone(app["worker"])
@@ -472,6 +676,98 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(app["status"], "FAILED: see USB log")
         self.assertEqual(closed, [True])
         app["on_exit"]()
+
+    def test_auto_generation_hold_pause_and_responsive_layout(self):
+        app, buttons = self.dashboard(ReferenceKernel())
+        drawn = []
+        app["screen"].text = lambda text, x, y: drawn.append((text, x, y))
+        for _ in range(2500):
+            drawn.clear()
+            app["update"]()
+            self.assertFalse(app["error"])
+            for text, x, y in drawn:
+                self.assertLessEqual(x + len(text) * 6, app["screen"].width)
+                self.assertLessEqual(y + 8, app["screen"].height)
+            if app["poet"].complete:
+                break
+        else:
+            self.fail("first neural poem did not finish")
+        number = app["poet"].number
+        buttons.add("SELECT")
+        app["update"]()
+        buttons.clear()
+        for _ in range(400):
+            app["update"]()
+        self.assertEqual(app["poet"].number, number)
+        self.assertEqual(app["hold_ms"], 0)
+        buttons.add("SELECT")
+        app["update"]()
+        buttons.clear()
+        for _ in range(400):
+            app["update"]()
+        self.assertEqual(app["poet"].number, number + 1)
+        for width, height in ((320, 240), (160, 120)):
+            app["screen"].width, app["screen"].height = width, height
+            app["poet"].text = ("Circuits circuits circuits circuits circuits circuits circuits circuits.",) * 2
+            app["poet"].complete = True
+            drawn.clear()
+            app["draw_poem"]()
+            for text, x, y in drawn:
+                self.assertLessEqual(x + len(text) * 6, width)
+                self.assertLessEqual(y + 8, height)
+        app["on_exit"]()
+
+    def test_poetry_frame_budget_and_explicit_overrun(self):
+        app, _ = self.dashboard(ReferenceKernel())
+        app["update"]()
+        app["cancel"]()
+        now = [0]
+        app["time"] = SimpleNamespace(ticks_us=lambda: now[0],
+                                      ticks_diff=lambda end, start: end - start)
+        advances = []
+        closed = []
+
+        def paced(duration):
+            try:
+                for _ in range(20):
+                    now[0] += duration
+                    advances.append(duration)
+                    yield
+            finally:
+                closed.append(True)
+
+        app["worker"] = paced(1000)
+        app["advance_poem"]()
+        self.assertEqual(advances, [1000] * 4)
+        app["cancel"]()
+        self.assertEqual(closed, [True])
+        app["worker"] = paced(16001)
+        with redirect_stdout(io.StringIO()):
+            app["update"]()
+        self.assertTrue(app["error"])
+        self.assertIsNone(app["worker"])
+        self.assertEqual(closed, [True, True])
+
+    def test_poetry_collects_headroom_and_fails_visibly_if_exhausted(self):
+        app, _ = self.dashboard(ReferenceKernel())
+        app["update"]()
+        free = [runtime.HEAP_RESERVE - 1]
+        collections = []
+
+        def collect():
+            collections.append(True)
+            free[0] = 8 * 1024 * 1024
+
+        app["gc"] = SimpleNamespace(collect=collect, mem_free=lambda: free[0])
+        app["update"]()
+        self.assertEqual(collections, [True])
+        self.assertFalse(app["error"])
+        app["gc"] = SimpleNamespace(collect=lambda: None,
+                                    mem_free=lambda: runtime.HEAP_RESERVE - 1)
+        with redirect_stdout(io.StringIO()):
+            app["update"]()
+        self.assertTrue(app["error"])
+        self.assertIsNone(app["worker"])
 
 
 def compiled_kernels(path):

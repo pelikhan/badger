@@ -1,19 +1,32 @@
 # Tiny Inference
 
-Tiny Inference checks and benchmarks bounded integer inference kernels on the Badger.
+Tiny Inference writes endless offline poems with a tiny trained integer model on the Badger.
 
 ## Controls and usage
 
-Open **Tiny Inference**, then press SELECT to run correctness checks, native dot
-and matrix benchmarks, and a three-step synthetic decoder. BACK cancels the
-current run; SELECT starts a fresh run. HOME returns to the launcher. Results
-stay in RAM until the next run or exit; nothing is saved or downloaded.
+Open **Tiny Inference** to start writing poems automatically. Words appear as
+the native integer model generates them. After each two-line poem, the app
+waits six seconds, resets its recurrent state, and writes another indefinitely.
+It retains only the current poem, not an ever-growing history. Poems can repeat;
+"endless" means an ongoing stream, not infinitely many unique poems.
 
-The dashboard shows progress, free heap, and a **prospective** model memory
-plan. The `Dot256` result is the median time for a batch of 16 dot products,
-not the time for one dot product. Detailed JSON-prefixed results and failures
-are printed to the USB console; the dashboard directs you there on failure.
+SELECT pauses/resumes writing and the reading timer. BACK discards the current
+poem and starts a fresh one. MENU switches between poems and the benchmark
+dashboard; HOME returns to the launcher. If a smaller viewport needs multiple
+pages, the reading interval cycles through them. Controls remain logical in
+either badge orientation.
+
+On the benchmark dashboard, SELECT runs the correctness/timing suite and BACK
+cancels it. MENU returns to the poem without retaining a partially executed
+word or benchmark. Results stay in RAM until the next benchmark run or exit.
+The dashboard's `Plan` is the **prospective transformer layout** described below,
+not the small poetry model's allocation. `Dot256` is the median time for a
+batch of 16 dot products, not one dot. Detailed JSON-prefixed benchmark results
+and failures are printed to the USB console.
+
 An unsupported target shows `RP2350 ARM required` instead of running a fallback.
+Missing, truncated, incompatible or checksum-invalid model assets fail visibly
+with a USB traceback; copy the entire app directory, including `assets`.
 
 ## Requirements and limits
 
@@ -25,12 +38,98 @@ directives, `uctypes.addressof`, and an ARM native architecture reported by
 the WebAssembly badge simulator cannot run these kernels. There is no NEON,
 Helium, external accelerator, native-module installation or firmware patch.
 
-No network, secrets, extra hardware, trained weights or tokenizer are required.
-This is a runtime-and-benchmark foundation, **not text generation or a
-pretrained-model-compatible language model**. It has no model loader, embedding
-executor, sampling loop, RoPE, gated FFN or multi-layer model executor. All
-benchmark weights are deterministic synthetic data; checksums are not model
-quality scores.
+No network, secrets or extra hardware are required. The trained poetry weights
+and 68-token vocabulary are bundled with the app; nothing is downloaded at
+runtime. This is a specialized toy poet, **not a general-purpose LLM or
+SmolLM implementation**. It cannot follow prompts, answer questions, or produce
+words outside its 64-word bank. Its language is deliberately narrow and may
+be repetitive, surreal or awkward. Benchmark decoder weights remain synthetic.
+
+## Trained poetry model and device fit
+
+The bundled model is a genuine, quantization-aware-trained Elman word RNN with
+64 hard-tanh hidden units and 68 tokens: 64 words plus line-end, poem-end,
+start and padding markers. Neural weights learn the word order and affinities;
+runtime generation does **not** select words from a per-position grammar table.
+Only start/padding suppression, minimum/maximum line lengths, a small repetition
+penalty, and two-line framing constrain sampling.
+
+| Model payload | Size |
+| --- | ---: |
+| Learned parameters, including learned biases | 12,932 |
+| Int8 weights, including alignment padding | 13,328 bytes |
+| Complete `assets/poet.bin`, including its header | 13,336 bytes |
+| Persistent numeric weights/shifts/state/logit/probability buffers | 14,268 bytes |
+| Pre-allocation guard, including estimated objects and loading overhead | 64 KiB |
+
+This is well below the 4 MiB app planning cap and the RP2350B's 8 MiB PSRAM,
+but actual firmware heap availability is still checked: creation must leave
+512 KiB free. Generation checks the reserve each active frame, collects
+between poems or when less than 16 KiB of extra headroom remains, and fails
+visibly if collection cannot recover enough free heap.
+No floating-point training checkpoint, PyTorch, NumPy, tokenizer
+library or firmware extension is installed on the badge. Only the two small native
+projections, integer state updates and Q15 sampling run there.
+
+The recurrent projection has 136 columns: a 68-token Q6 one-hot vector, 64
+Q6 hidden values, a Q6 constant bias input (64), and three padding zeros.
+Its weights are Q6 and its requantization shift is 6. Clamp the result to
+[-64, 64] for hard-tanh. The readout has 68 columns: the 64 hidden values,
+the constant bias and three zeros. Its weights are Q5 and its shift is 7,
+producing Q4 logits. Both use `Linear` and the **same native ARM kernels**
+as the benchmarks; there is no Python inference fallback.
+
+Multiply logits by 24 for Q8 softmax scores at temperature 2/3, subtract 128
+from scores for previously used words, and sample the exact-sum Q15
+distribution with an unsigned 15-bit random draw. Lines contain 3..8 words.
+If the model does not end a line, the eight-word safety limit forces a boundary.
+After two lines, generation stops until the next poem reset. The hidden state
+is fixed at 64 bytes; no growing KV cache is needed. The display adds sentence
+capitalization and periods.
+
+`assets/poet.json` records architecture, quantization, vocabulary/model SHA-256,
+training settings and held-out metrics. The loader verifies its format and
+dimensions, the binary header, exact length, vocabulary digest and weight
+checksum. Loading yields after at most 512 bytes; both projections yield per
+row. Closing a word operation leaves its published recurrent state and text
+unchanged. Reopening or switching screens closes open model files/generators.
+
+### Training and provenance
+
+The model was trained locally on **102,400 procedurally generated original
+couplets**, from the word banks in `poet.py`. No existing poems, pretrained
+weights or external text dataset were downloaded or copied. Training examples
+use adjective/noun/verb/preposition/adjective/noun lines with sky, woodland,
+circuit and sea affinities. That grammar creates training examples; it is not
+a runtime word-selection rule.
+
+Training used 1,600 batches of 64, seed 20261028, CPU PyTorch 2.7.1 and NumPy
+2.2.6. Fake-quantized weights, hidden state and logits match the on-device
+round-away/clamp operations. On 512 separate synthetic held-out couplets,
+cross-entropy was 1.803731 nats and argmax grammatical-category accuracy
+99.9581%. These describe this constrained synthetic task, **not general
+language ability or human-rated poetry quality**.
+
+To reproduce training on a host with compatible Python 3.10+ and those two
+packages installed (not on the badge):
+
+```sh
+python3 tools/train_tiny_poet.py
+```
+
+The tool checks held-out loss/category accuracy and exact integer-export
+equivalence to its quantized training graph before replacing the bundled
+binary/manifest. Its defaults match the shipped model; a second training run
+reproduced the binary and manifest byte for byte. It uses no remote APIs
+and writes no training checkpoints. Host checks also sample 200 complete
+integer-generated poems, verify bounded state and varied output, and require
+at least 90% of lines to follow the learned training grammar.
+
+SmolLM itself cannot meet this hardware envelope: the smallest
+[SmolLM2 model has 135 million parameters](https://huggingface.co/HuggingFaceTB/SmolLM2-135M).
+Even ideal 4-bit weight packing alone is about 64 MiB, before scales,
+activations and cache, exceeding both the badge's PSRAM and its shared 16 MiB
+flash. This much smaller custom RNN is not a renamed/truncated SmolLM.
 
 ## Native arithmetic contract
 
@@ -78,7 +177,7 @@ point scales or biases. Callers must encode -128..-1 as bytes 128..255.
   context is an explicit error, never a silent truncation or eviction.
 - `DecoderBlock((q,k,v,o,up,down), (gain1,gain2), context, heads, score_shift,
   kernel)`: one pre-RMS attention block with saturated residual adds and a
-  ReLU FFN. `step(input_bytes)` is a generator; fully exhaust it to commit
+  ReLU FFN (separate from the trained recurrent poet). `step(input_bytes)` is a generator; fully exhaust it to commit
   `block.output`. It snapshots inputs at its first advance, rejects reentrant
   steps, and permits feedback from the previous output. Close the generator
   on cancellation: partial output is private and the logical cache length
@@ -122,7 +221,7 @@ and six bytes per context position for scores/probabilities. The planner
 reserves an extra width vector per block. Dimensions and planned totals are
 checked; configurations exceeding 4 MiB are rejected.
 
-**This is allocation planning, not measured hardware capacity or a loader.**
+**This is allocation planning, not measured hardware capacity or a transformer loader.**
 It excludes interpreter/firmware/display heap use and cannot stop a caller
 from retaining unrelated objects or allocating multiple independent models.
 Call `require_heap(plan["total"], gc.mem_free())` before future whole-model
@@ -132,7 +231,14 @@ benchmark requires 128 KiB plus that reserve before allocating its small
 working set and checks sampled free heap between stages. Object allowances are
 conservative estimates, not an exact MicroPython allocator accounting.
 
-One benchmark work slice runs per frame. Correctness setup and matrix
+One benchmark work slice runs per frame. Poetry runs at most eight native rows
+per frame, stopping early after 4,000 us of accumulated inference/loading work;
+an individual slice over 16,000 us fails visibly. Initial allocations, drawing,
+firmware time and garbage collection are not included in that soft work budget.
+The reading timer uses bounded `badge.ticks_delta` accumulation and stops while
+paused or on the benchmark screen.
+
+Correctness setup and matrix
 initialization yield incrementally; projections yield per row, attention per
 score/channel. The dashboard times every generator advance with `ticks_us()`,
 records the maximum work-slice time and **stops with an explicit error if a
@@ -176,8 +282,10 @@ python3 "$HOME/.copilot/skills/hyb26-skill/scripts/validate_app.py" badge/apps/t
 ```
 
 The default test run uses independent integer/float references for math,
-memory planning, aliases, full context, every decoder cancellation point,
-rollback/retry, input snapshots, reentrancy, failures and scheduler overruns.
+memory planning, aliases, full context, every decoder/poet cancellation point,
+rollback/retry, input snapshots, reentrancy, model corruption, learned poem
+quality, bounded long-run generation, timer/pause/skip/menu behavior,
+word wrapping/paging and scheduler overruns.
 Native execution tests skip explicitly if their optional tools are absent.
 To exercise native code without hardware, install `mpy-cross==1.29.0` and
 `unicorn==2.1.4` into a host virtual environment and run:
@@ -190,6 +298,8 @@ The native tests compile the **actual** `thumb.py`, extract the two inline-ASM
 functions from MPY v6.3, and execute those exact bytes on Unicorn's Cortex-M33.
 They check signed extrema, random vectors, offsets, all rounding shifts/ties,
 stack/callee-saved registers, and repeat the runtime tests with that backend.
+This includes actual trained-poet inference and integer-state/logit equivalence,
+not just synthetic weights.
 They do not substitute a handwritten copy of the kernels. The deliberately
 small parser rejects a changed MPY format. Generated MPY files are temporary,
 not app assets; deploy source so the badge uses its own firmware compiler.
@@ -206,17 +316,22 @@ performed. **Physical verification and real throughput/memory are outstanding.**
 Use the skill's USB guide for any later, explicitly requested deployment.
 Copy only this app; do not install an icon or modify firmware/system apps.
 
-1. Confirm normal launcher entry on RP2350 ARM firmware, then SELECT and
+1. Confirm normal launcher entry on RP2350 ARM firmware, then MENU, SELECT and
    capture all PASS/JSON lines. Check golden decoder outputs, free-heap reserve,
    real maximum work slice and timing results; do not infer them from emulation.
-2. Exercise BACK during correctness setup, matrix rows and decoder attention,
-   then SELECT again. Check no partial run survives and the rerun matches.
-3. Exercise HOME during each stage, reopen repeatedly, and check responsiveness
+2. Confirm continuous neural poems, readable wrapping and the six-second
+   reading interval. SELECT must pause both typing and the interval; BACK
+   starts a new poem. Let many poems finish and verify free heap remains stable.
+   MENU must enter/leave benchmarks without retaining a partial word.
+3. Exercise BACK during benchmark correctness setup, matrix rows and decoder
+   attention, then SELECT again. Check no partial run survives and the rerun matches.
+4. Exercise HOME during loading, poems and benchmarks, reopen repeatedly, and check responsiveness
    and recovered free heap after collection. Rotate both ways; verify readable
    dashboard text and logical SELECT/BACK controls.
-4. Check full-context rejection and clear/retry through a small REPL harness
+5. Check full-context rejection and clear/retry through a small REPL harness
    using `synthetic_block`; never overrun allocated K/V buffers. Exercise a
    low-free-heap rejection without deliberately exhausting the system.
-5. Record firmware version, CPU frequency, free heap, dot/matrix/decoder times
-   and maximum slice. Unsupported firmware must fail visibly, not execute a
+6. Record firmware version, CPU frequency, free heap, word generation latency,
+   dot/matrix/decoder times and maximum slice. Unsupported firmware or damaged
+   model assets must fail visibly, not execute a
    slow fallback. Do not connect a second serial owner or change firmware.

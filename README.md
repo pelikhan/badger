@@ -9,7 +9,7 @@ Apps for the GitHub Universe 2026 badge.
 | [Factory Mindset](badge/apps/factory_mindset/) | A fifteen-scene animated text/vector story about programming with a phone and a cloud agent. |
 | [MicroCode](badge/apps/microcode/) | An offline, icon-based WHEN/DO programming editor with five pages, saved programs, animations, and badge sensors. |
 | [Quantum Diffusion](badge/apps/quantum_diffusion/) | Full-screen waves triggered by motion and capacitive touches, with a cycling GitHub brand-color palette. |
-| [Tiny Inference](badge/apps/tiny_inference/) | Native Cortex-M33 int8 inference kernels, bounded decoder primitives, and synthetic correctness/performance benchmarks. |
+| [Tiny Inference](badge/apps/tiny_inference/) | Endless offline poems from a tiny trained int8 recurrent model, with native Cortex-M33 kernels and correctness/performance benchmarks. |
 
 Factory Mindset was migrated from the Home skills session's Factory mindset
 slideshow worktree. Quantum Diffusion was migrated from the Agent skills
@@ -41,9 +41,11 @@ network access.
 
 Tiny Inference requires RP2350 ARM MicroPython with inline Thumb assembly and
 uses the launcher's default icon. It maps int8 dot products to M33 DSP
-instructions without a slow fallback; it includes no trained model or text
-generator. Its README distinguishes prospective memory budgets, native
-instruction emulation, and outstanding physical throughput/memory checks.
+instructions without a slow fallback and bundles a 13 KiB trained recurrent
+poetry model. It writes ongoing, bounded-memory couplets; MENU opens the
+benchmarks. Its README documents training provenance, limited vocabulary,
+prospective transformer budgets, native instruction emulation, and outstanding
+physical throughput/memory checks. It is not SmolLM or a general-purpose LLM.
 
 ## Development
 

@@ -1,7 +1,8 @@
-"""Hardware-only quantized inference correctness and benchmark dashboard."""
+"""Continuous offline poetry with native integer benchmarks behind MENU."""
 
 import gc
 import os
+import random
 import sys
 import time
 
@@ -9,9 +10,13 @@ APP_DIR = "/system/apps/tiny_inference"
 os.chdir(APP_DIR)
 sys.path.insert(0, APP_DIR)
 
-from benchmark import Benchmark
-from runtime import memory_plan
+from benchmark import Benchmark, STEP_BUDGET_US
+from poet import Poet, wrap_lines
+from runtime import HEAP_RESERVE, memory_plan, require_heap
 
+HOLD_MS = 6000
+FRAME_WORK_US = 4000
+ROWS_PER_FRAME = 8
 plan_kib = memory_plan()["total"] // 1024
 screen.font = font.nope
 background = color.rgb(13, 17, 23)
@@ -20,7 +25,14 @@ accent = color.rgb(163, 230, 53)
 failure = color.rgb(248, 81, 73)
 worker = None
 benchmark = None
-status = "SELECT to run"
+poet = None
+mode = "poems"
+paused = False
+hold_ms = 0
+layout_key = None
+poem_rows = []
+maximum_slice_us = 0
+status = "Preparing word model"
 error = False
 native = None
 
@@ -45,49 +57,141 @@ def on_exit():
     cancel()
 
 
-def update():
-    global worker, benchmark, status, error
-
-    if badge.pressed(BUTTON_BACK):
-        cancel()
-        if native is not None:
-            status = "Stopped; SELECT runs"
-    elif native is not None and worker is None and badge.pressed(BUTTON_SELECT):
-        benchmark = None
+def advance_poem():
+    global poet, worker, hold_ms, maximum_slice_us
+    if paused:
+        return
+    if poet is None:
         gc.collect()
-        benchmark = Benchmark(native, time, gc.mem_free)
-        worker = benchmark.run()
-        error = False
-    if worker is not None:
+        poet = Poet(native, random.getrandbits)
+    if gc.mem_free() < HEAP_RESERVE + 16 * 1024:
+        gc.collect()
+        require_heap(16 * 1024, gc.mem_free())
+    if poet.complete:
+        hold_ms = min(HOLD_MS, hold_ms + max(0, badge.ticks_delta))
+        if hold_ms < HOLD_MS:
+            return
+        poet.restart()
+        hold_ms = 0
+        gc.collect()
+    if worker is None:
+        worker = poet.step() if poet.ready else poet.prepare()
+    frame_start = time.ticks_us()
+    for _ in range(ROWS_PER_FRAME):
+        started = time.ticks_us()
+        finished = False
         try:
-            status = benchmark.advance(worker)
+            next(worker)
         except StopIteration:
-            cancel()
-            status = "Complete; SELECT runs"
-        except (AssertionError, MemoryError, RuntimeError, ValueError) as exception:
-            cancel()
-            status = "FAILED: see USB log"
-            error = True
-            print("tiny_inference benchmark FAILED")
-            sys.print_exception(exception)
+            finished = True
+        elapsed = time.ticks_diff(time.ticks_us(), started)
+        maximum_slice_us = max(maximum_slice_us, elapsed)
+        if elapsed > STEP_BUDGET_US:
+            raise RuntimeError("poetry work slice exceeded 16 ms: %d us" % elapsed)
+        if finished:
+            worker = None
+            break
+        if time.ticks_diff(time.ticks_us(), frame_start) >= FRAME_WORK_US:
+            break
+    require_heap(0, gc.mem_free())
 
-    screen.pen = background
-    screen.rectangle(screen.clip)
+
+def draw_poem():
+    global layout_key, poem_rows
+    screen.pen = accent
+    title = "POEM %d" % poet.number if poet is not None else "INFINITE POEMS"
+    screen.text(title + (" / PAUSED" if paused else ""), 4, 4)
+    screen.pen = foreground
+    if poet is not None and poet.text:
+        key = (poet.text, screen.width, screen.height)
+        if key != layout_key:
+            poem_rows = wrap_lines(poet.text, screen.width - 8, screen.measure_text)
+            layout_key = key
+        line_height = screen.measure_text("Ag")[1] + 2
+        available = max(1, (screen.height - 30) // line_height)
+        pages = max(1, (len(poem_rows) + available - 1) // available)
+        page = min(pages - 1, hold_ms * pages // HOLD_MS) if poet.complete else pages - 1
+        for index, line in enumerate(poem_rows[page * available:(page + 1) * available]):
+            screen.text(line, 4, 17 + index * line_height)
+    else:
+        message = "Preparing word model" if poet is None or not poet.ready else "Writing first word"
+        screen.text(message, 4, 24)
+    screen.pen = accent
+    help_text = "SEL pause  BACK new  MENU"
+    if screen.measure_text(help_text)[0] > screen.width - 8:
+        help_text = "SEL / BACK / MENU"
+    screen.text(help_text, 4, screen.height - 11)
+
+
+def draw_dashboard():
     screen.pen = failure if error else accent
     screen.text("TINY INFERENCE / W8A8", 4, 4)
     screen.pen = foreground
     lines = [
-        status, "M33 DSP + int32 sums", "No trained model loaded",
+        status, "M33 DSP + int32 sums", "64-word neural poet",
         "Free: %d KiB" % (gc.mem_free() // 1024),
         "Plan: %d KiB / 4 MiB" % plan_kib,
     ]
     if benchmark is not None and "dot_256" in benchmark.results:
         result = benchmark.results["dot_256"]
         lines.append("Dot256: %d us/batch" % result["median_batch_us"])
-    lines.extend(("SELECT run / BACK stop", "HOME exits; logs via USB"))
+    lines.extend(("SELECT run / BACK stop", "MENU poems / HOME exit"))
     for index, line in enumerate(lines):
         if 19 + index * 11 < screen.height - 6:
             screen.text(line, 4, 19 + index * 11)
+
+
+def update():
+    global worker, benchmark, status, error, mode, paused, hold_ms
+    try:
+        if native is not None:
+            if badge.pressed(BUTTON_MENU):
+                cancel()
+                mode = "benchmarks" if mode == "poems" else "poems"
+                benchmark = None
+                status = "SELECT to run"
+                error = False
+            elif badge.pressed(BUTTON_BACK):
+                cancel()
+                if mode == "poems":
+                    if poet is not None:
+                        poet.restart()
+                    hold_ms = 0
+                    paused = False
+                else:
+                    status = "Stopped; SELECT runs"
+                error = False
+            elif badge.pressed(BUTTON_SELECT):
+                if mode == "poems":
+                    paused = not paused
+                elif worker is None:
+                    benchmark = None
+                    gc.collect()
+                    benchmark = Benchmark(native, time, gc.mem_free)
+                    worker = benchmark.run()
+                    error = False
+            if not error:
+                if mode == "poems":
+                    advance_poem()
+                elif worker is not None:
+                    try:
+                        status = benchmark.advance(worker)
+                    except StopIteration:
+                        cancel()
+                        status = "Complete; SELECT runs"
+    except (AssertionError, MemoryError, OSError, RuntimeError, ValueError) as exception:
+        cancel()
+        status = "FAILED: see USB log"
+        error = True
+        print("tiny_inference " + mode + " FAILED")
+        sys.print_exception(exception)
+
+    screen.pen = background
+    screen.rectangle(screen.clip)
+    if mode == "poems" and not error:
+        draw_poem()
+    else:
+        draw_dashboard()
 
 
 run(update)
