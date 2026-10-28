@@ -1,0 +1,67 @@
+# Badger
+
+Apps for the GitHub Universe 2026 badge.
+
+## Apps
+
+| App | Description |
+| --- | --- |
+| [Factory Mindset](badge/apps/factory_mindset/) | A fifteen-scene animated text/vector story about programming with a phone and a cloud agent. |
+| [Quantum Diffusion](badge/apps/quantum_diffusion/) | Full-screen waves triggered by motion and capacitive touches, with a cycling GitHub brand-color palette. |
+
+Factory Mindset was migrated from the Home skills session's Factory mindset
+slideshow worktree. Quantum Diffusion was migrated from the Agent skills
+session's Quantum performance worktree (`pelikhan/fresh-repo`, commit `c2b2e76`), preserving its
+source, documentation, tests, and benchmark. Each app is self-contained and
+can be installed independently; this repository does not include firmware
+or a launcher fork.
+
+## Install
+
+Copy an app's complete directory from `badge/apps/` into `apps/` on the
+badge's **BADGER** USB Disk Mode volume, then safely eject it. Never copy
+apps to the RP2350 firmware drive. Keep directory names unchanged:
+`factory_mindset` and `quantum_diffusion` run from their respective
+`/system/apps/<name>` paths.
+
+Read each app's README for controls and firmware requirements. Factory Mindset
+uses the stock `MonaSans-Medium.af` font and native HIRES text/vector drawing.
+Quantum Diffusion requires 2026 RP2350 firmware with Viper, soft timer callbacks,
+a writable RGB565 framebuffer, and the firmware's `_poll_imu` hook. It
+does not have a portable simulator fallback. Both apps intentionally use the
+launcher's default icon. Neither needs credentials or network access.
+
+## Development
+
+Run the host-side regression suite from the repository root:
+
+```sh
+python3 -m unittest discover -s tests -v
+```
+
+Package Factory Mindset for badge installation and the MicroPython simulator:
+
+```sh
+python3 tools/package_factory.py --output /tmp/factory-mindset-package
+```
+
+The output contains an installation ZIP and a simulator `project.json`, without
+bundling the firmware's stock font.
+
+Run the desktop solver benchmark:
+
+```sh
+python3 tests/benchmark_quantum_diffusion.py
+```
+
+See [AGENTS.md](AGENTS.md) for collection conventions and the HYB26 skill's
+scaffolding, validation, and deployment workflow.
+
+Host-side checks do not prove badge behavior or performance. The
+[Factory Mindset README](badge/apps/factory_mindset/README.md) documents playback,
+simulator support, and its physical acceptance checklist. The
+[Quantum Diffusion README](badge/apps/quantum_diffusion/README.md) includes static
+validation commands, physical-badge benchmarks, and the remaining gesture,
+light, orientation, HOME/reopen, and visual checks. Historical simulator and
+hardware results were recorded in the source sessions, not rerun by these
+migrations.
