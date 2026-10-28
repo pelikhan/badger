@@ -110,6 +110,39 @@ Cleanup releases the last key when possible, stops advertising, disconnects,
 unregisters this app's handler, and disables its radio. Pairing failures,
 missing modules, and storage errors are visible on screen and in the console.
 
+### Offline firmware investigation
+
+The public Tufty
+[build recipe](https://github.com/pimoroni/tufty2350/blob/ee84772fb7f7d5424e9593029caba815c6f89c80/ci/micropython.sh)
+selects `pimoroni/micropython` branch `bw-1.29.0-gc`, inspected at
+`41d1e007537f9b15cf13a9436228dd59d6485eca`, with BTstack dependency
+`77e752abd6a0992334047a48038a5a3960e5c6bc`. This is a reference build,
+**not established provenance for the installed custom Badger firmware**.
+Its backend has the same read-only Service Changed stub. It also registers
+an HCI handler but no Security Manager handler, and never handles
+`SM_EVENT_JUST_WORKS_REQUEST`. The pinned BTstack emits that event and
+requires `sm_just_works_confirm()` to continue. Enabling the pairing compile
+flag alone would therefore not complete this implementation.
+
+A targeted firmware repair must provide a real Service Changed indication
+characteristic and working CCCD storage/callbacks, plus the indication and
+cache-invalidation lifecycle. Merely adding the INDICATE property is
+insufficient: BTstack generates a dynamic CCCD whose value the MicroPython
+backend must manage. The security path also needs policy-aware Just Works
+confirmation, correctly routed encryption events, and real device-specific
+key storage before claiming persistent bonds; the reference backend
+currently initializes ER/IR to zero and links an in-memory device database.
+
+Switching to NimBLE is not a verified configuration-only solution. The
+reference RP2 NimBLE port uses the UART HCI interface; the CYW43 transport
+used here is wired through the BTstack port. A replacement needs transport
+integration as well as compatible badge runtime/radio modules.
+
+No firmware image has been built or flashed. A safe board-specific patch
+and build remain blocked on the custom **GitHub Badger 2350** source/build
+configuration and its actual dependency revisions. Stock Tufty firmware
+must not be substituted for that custom hardware.
+
 ## HID and bonding implementation
 
 The HID service (0x1812) exposes HID Information, Report Map, Control Point,
@@ -198,8 +231,10 @@ then was deployed with backup and installed-byte verification. During one
 separately approved connection attempt, the badge confirmed ATT MTU 23, but
 pairing still failed. macOS again recorded the same Service Changed error
 before Device Information reads, and `bluetoothd` crashed with
-`EXC_BAD_ACCESS` / `SIGSEGV` at address 0x1. No input subscription/write events
-or native HID keyboard registration occurred. Reducing the MTU is therefore
+`EXC_BAD_ACCESS` / `SIGSEGV` at address 0x1. No app-visible report/protocol
+writes or native HID keyboard registration occurred. BTstack suppresses
+Python CCCD-write events, so the trace alone does not establish whether the
+host subscribed. Reducing the MTU is therefore
 **not a solution**. There have been five observed daemon crashes in total;
 do not make additional connection attempts without fresh informed permission.
 
@@ -232,6 +267,8 @@ Physical verification remains outstanding:
   including security flags, pairing events, and notification subscriptions.
 - [MicroPython BTstack backend](https://github.com/micropython/micropython/blob/master/extmod/btstack/modbluetooth_btstack.c)
   and [pairing compile gate](https://github.com/micropython/micropython/blob/master/extmod/modbluetooth.h).
+- [Vendor-pinned backend](https://github.com/pimoroni/micropython/blob/41d1e007537f9b15cf13a9436228dd59d6485eca/extmod/btstack/modbluetooth_btstack.c)
+  and [pinned BTstack Just Works state machine](https://github.com/bluekitchen/btstack/blob/77e752abd6a0992334047a48038a5a3960e5c6bc/src/ble/sm.c#L1025-L1070).
 - [Tufty Bluetooth configuration](https://github.com/pimoroni/tufty2350/blob/main/board/mpconfigboard.cmake)
   and [manifest](https://github.com/pimoroni/tufty2350/blob/main/board/manifest.py).
 - [Bluetooth SIG HID over GATT Profile 1.0](https://www.bluetooth.com/specifications/specs/hid-over-gatt-profile-1-0/)
