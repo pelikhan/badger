@@ -8,7 +8,7 @@ Apps for the GitHub Universe 2026 badge.
 | --- | --- |
 | [Factory Mindset](badge/apps/factory_mindset/) | A fifteen-scene animated text/vector story about programming with a phone and a cloud agent. |
 | [MicroCode](badge/apps/microcode/) | An offline, icon-based WHEN/DO programming editor with five pages, saved programs, animations, and badge sensors. |
-| [Quantum Diffusion](badge/apps/quantum_diffusion/) | Full-screen waves triggered by motion and capacitive touches, with a cycling GitHub brand-color palette. |
+| [Quantum Diffusion](badge/apps/quantum_diffusion/) | Motion/touch waves and a no-pairing group firefly rhythm, with a cycling GitHub brand-color palette. |
 
 Factory Mindset was migrated from the Home skills session's Factory mindset
 slideshow worktree. Quantum Diffusion was migrated from the Agent skills
@@ -30,13 +30,14 @@ apps to the RP2350 firmware drive. Keep directory names unchanged:
 Read each app's README for controls and firmware requirements. Factory Mindset
 uses the stock `MonaSans-Medium.af` font and native HIRES text/vector drawing.
 Quantum Diffusion requires 2026 RP2350 firmware with Viper, soft timer callbacks,
-a writable RGB565 framebuffer, and the firmware's `_poll_imu` hook. It
+a writable RGB565 framebuffer, the firmware's `_poll_imu` hook, and
+`badgeware.link.radio` for connectionless Bluetooth firefly synchronization. It
 does not have a portable simulator fallback. Both apps intentionally use the
 launcher's default icon. MicroCode uses the stock `font.sins` font, draws its
 icons in code without PNG assets, and also intentionally uses the launcher's
 default icon. It saves drafts and three program slots under `/state`; sensor
-features require the corresponding firmware APIs. No app needs credentials or
-network access.
+features require the corresponding firmware APIs. No app needs credentials,
+Wi-Fi or internet access.
 
 ## Development
 

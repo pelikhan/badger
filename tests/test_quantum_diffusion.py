@@ -6,6 +6,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, call, patch
 
+from test_quantum_firefly import load_firefly
+
 
 APP = Path(__file__).resolve().parents[1] / "badge/apps/quantum_diffusion"
 SPEC = importlib.util.spec_from_file_location("quantum_field", APP / "field.py")
@@ -320,11 +322,13 @@ class RuntimeTests(unittest.TestCase):
             context["BUTTON_" + action] = action
         clock = [0]
         sensors = load_sensors(clock)
+        firefly = load_firefly(clock)
         with patch("os.chdir"), patch.dict("sys.modules", {
-            "field": physics, "sensors": sensors, "palette": palettes,
+            "field": physics, "sensors": sensors, "palette": palettes, "firefly": firefly,
         }), patch("sys.path", []):
             exec(compile((APP / "__init__.py").read_text(), "__init__.py", "exec"), context)
         context["motion"].start()
+        context["fireflies"].start()
         context["clock"] = clock
         context["touches"] = touches
         return context, badge, pressed
@@ -341,6 +345,18 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(list(first["field"].current), list(second["field"].current))
         self.assertEqual(list(first["PALETTE"]), list(second["PALETTE"]))
         self.assertEqual(first["brand_palette"].phase_ms, 1000)
+
+    def test_firefly_rhythm_adds_center_waves_without_resetting_color(self):
+        app, badge, _ = self.app()
+        app["fireflies"].phase = 0
+        app["fireflies"].since_flash = 0
+        badge.ticks_delta = 2000
+        app["clock"][0] = 2000
+        with patch.object(app["field"], "impulse", wraps=app["field"].impulse) as pulse:
+            app["update"]()
+        pulse.assert_called_once_with(32, 24, physics.PULSE)
+        self.assertEqual(app["source"], "FIREFLY")
+        self.assertEqual(app["brand_palette"].phase_ms, 2000)
 
     def test_stalled_frame_has_bounded_catchup(self):
         app, badge, _ = self.app()
@@ -543,6 +559,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertFalse(service.timer.active)
         self.assertFalse(service.running)
         self.assertEqual(badge._poll_imu, service.poll_imu)
+        self.assertFalse(app["fireflies"].running)
 
     def test_timer_owns_imu_poll_without_consuming_button_edges(self):
         app, badge, pressed = self.app()
