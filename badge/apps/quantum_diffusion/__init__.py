@@ -8,6 +8,7 @@ os.chdir(APP_DIR)
 sys.path.insert(0, APP_DIR)
 
 from field import PULSE, SCALE, STEP_MS, WaveField
+from firefly import Fireflies
 from kernel import render
 from palette import BrandPalette
 from sensors import Sensors
@@ -24,6 +25,7 @@ brand_palette = BrandPalette()
 PALETTE = brand_palette.colors
 if screen.stride != screen.width * 2 or len(screen.raw) != screen.stride * screen.height:
     raise RuntimeError("Quantum Diffusion requires the 2026 RGB565 framebuffer")
+fireflies = Fireflies()
 accumulator = 0
 pulses = 0
 source = "BOOT"
@@ -55,8 +57,10 @@ def draw():
 
 def update():
     global accumulator, touch_mask
-    brand_palette.update(max(0, badge.ticks_delta))
     elapsed = max(0, min(100, badge.ticks_delta))
+    if fireflies.update():
+        pulse(field.width // 2, field.height // 2, label="FIREFLY")
+    brand_palette.set_phase(fireflies.color_phase_ms)
     impulse = motion.take()
 
     if impulse is not None:
@@ -84,10 +88,18 @@ def update():
 
 
 def on_exit():
-    motion.stop()
+    try:
+        motion.stop()
+    finally:
+        fireflies.stop()
 
 
 pulse(field.width // 2, field.height // 2, label="BOOT")
-motion.start()
+try:
+    motion.start()
+    fireflies.start()
+except (OSError, RuntimeError, TypeError, ValueError):
+    on_exit()
+    raise
 run(update)
 on_exit()
