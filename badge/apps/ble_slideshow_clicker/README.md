@@ -122,8 +122,8 @@ and suspend/resume are honored; LED output is accepted but not displayed.
 Battery Service exposes the runtime's percentage, refreshed once per minute.
 The app requests ATT MTU 23: its eight-byte reports fit in the default
 20-byte payload, while hosts must use long reads for the Report Map.
-This is a diagnostic interoperability change; it is not yet a confirmed fix
-for the observed Mac failure.
+This diagnostic interoperability change did not prevent the observed Mac
+failure in the controlled test below.
 
 Device Information includes a descriptive manufacturer/model and the
 [pid.codes private test identity 1209:0001](https://pid.codes/1209/0001/).
@@ -191,13 +191,23 @@ registers 0x2A05 as read-only, without
 indications or a CCCD. The public Python registration API always preserves
 that built-in service, so changing app Device Information fields cannot
 repair it. This is a concrete interoperability defect, but its causal role
-in the macOS crash remains unconfirmed. The diagnostic build now limits
-MTU negotiation to 23 instead of the observed 527. This change has passed
-desktop tests and static checks only; it has not been deployed or paired.
+in the macOS crash remains unconfirmed.
 
-The controlled retest stopped after its first disconnect, disabled BLE, and
-reported the radio inactive. Do not treat successful advertising, a transient
-BLE connection, or desktop tests as a working Mac slideshow clicker.
+The MTU-23 diagnostic build passed 35 desktop tests and both static validators,
+then was deployed with backup and installed-byte verification. During one
+separately approved connection attempt, the badge confirmed ATT MTU 23, but
+pairing still failed. macOS again recorded the same Service Changed error
+before Device Information reads, and `bluetoothd` crashed with
+`EXC_BAD_ACCESS` / `SIGSEGV` at address 0x1. No input subscription/write events
+or native HID keyboard registration occurred. Reducing the MTU is therefore
+**not a solution**. There have been five observed daemon crashes in total;
+do not make additional connection attempts without fresh informed permission.
+
+The controlled retests each stopped after their first disconnect and disabled
+BLE. After the MTU-23 attempt, a separate read verified the radio inactive
+before the badge was reset to the menu and serial access released.
+Do not treat successful advertising, a transient BLE connection, or desktop
+tests as a working Mac slideshow clicker.
 
 Physical verification remains outstanding:
 
